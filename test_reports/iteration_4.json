@@ -1,0 +1,23 @@
+{
+  "summary": "Iteration 4 (multi-account GPay pool) fully tested. Backend: 47/47 pytest cases pass (16 new for iteration 4 + 31 regression from iterations 1-3, 1 pre-existing skip). Frontend: pool CRUD UI, header pill 'GPay ×N', dashboard row-gpay, and mobile 390px overflow all pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_4.py",
+    "/app/test_reports/pytest/iteration_4.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "gpay_service.py: legacy /api/gpay/login upserts an account labelled 'Default' only on first create; if the account already exists under a different label, re_login preserves that label (good). No leaks of password_enc verified in list & add responses.",
+    "gpay_pool.set_active(True) fires async login but the /reactivate route returns immediately — UI needs the 5s polling refresh (implemented) to see is_logged_in flip. Acceptable but consider awaiting the login result for better UX.",
+    "bot_orchestrator: reply template failure path now uses tpl_fail which lacks {account_label} placeholder in default; that's fine since verify sets account_label='' for not-found. Confirmed.",
+    "GPayAccounts.jsx uses label as data-testid suffix — labels must be URL/CSS-safe. Consider disallowing spaces/special chars or slugifying for testids in future."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_4.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "n/a (mock mode)",
+  "seed_data_creation": "Tests create TEST_-prefixed accounts and clean them up in teardown; end-state matches pre-test (Store-A + Store-B both active).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "backend/tests/test_iteration_4.py covers: CRUD (add/list/patch/delete), password encryption (no leak), hit-limit + reactivate lifecycle, re-login with & without password (rotation), parallel verify via /api/gpay/verify (even UTR winner + odd UTR fails + no-active-account reason), status counts, legacy /api/gpay/login upsert. Regression tests from iterations 1-3 also pass. Frontend tested with data-testids btn-hit-limit-<label>, btn-reactivate-<label>, btn-remove-<label>, pill-gpay, row-gpay, gpay-count. Note: dashboard shows 0/0 briefly before the initial /status fetch resolves — cosmetic race, not a bug."
+}
