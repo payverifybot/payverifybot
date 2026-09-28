@@ -71,10 +71,29 @@ export default function Setup() {
         <Field label="Failure reply template" testid="input-tpl-fail">
           <input value={settings.reply_template_fail} onChange={(e) => setSettings({ ...settings, reply_template_fail: e.target.value })} className="input" />
         </Field>
+        <Field label="Duplicate UTR reply template" testid="input-tpl-dup">
+          <input value={settings.reply_template_duplicate || ""} onChange={(e) => setSettings({ ...settings, reply_template_duplicate: e.target.value })} className="input" />
+          <p className="hint">Placeholders: {"{utr_last4}"}, {"{orig_sender}"}, {"{orig_time}"}</p>
+        </Field>
         <label className="flex items-center gap-2 text-sm text-zinc-300 select-none">
           <input data-testid="chk-auto-reply" type="checkbox" checked={settings.auto_reply} onChange={(e) => setSettings({ ...settings, auto_reply: e.target.checked })} className="accent-emerald-500" />
           Auto-reply in group when verification completes
         </label>
+
+        <div className="border-t border-zinc-800 pt-4 space-y-3">
+          <div className="text-sm font-medium text-zinc-200">Daily digest email</div>
+          <Field label="Owner email">
+            <input data-testid="input-owner-email" type="email" value={settings.owner_email || ""} onChange={(e) => setSettings({ ...settings, owner_email: e.target.value })} className="input" placeholder="you@yourbusiness.com" />
+          </Field>
+          <Field label="Owner name (used in email greeting)">
+            <input data-testid="input-owner-name" value={settings.owner_name || ""} onChange={(e) => setSettings({ ...settings, owner_name: e.target.value })} className="input" placeholder="Rahul" />
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-zinc-300 select-none">
+            <input data-testid="chk-digest" type="checkbox" checked={!!settings.digest_enabled} onChange={(e) => setSettings({ ...settings, digest_enabled: e.target.checked })} className="accent-emerald-500" />
+            Email a daily summary at 9:00 PM IST
+          </label>
+        </div>
+
         <button data-testid="btn-save-settings" onClick={saveSettings} disabled={saving} className="btn-primary">
           {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save settings
         </button>

@@ -8,9 +8,10 @@ export default function Transactions() {
   const [filter, setFilter] = useState("");
 
   const load = async () => {
-    const q = filter ? `?status_filter=${filter}` : "";
-    const data = await fetch(`${API}/transactions${q}&limit=100`.replace("?&", "?")).then((r) => r.json());
-    setItems(data);
+    const params = new URLSearchParams({ limit: "100" });
+    if (filter) params.set("status_filter", filter);
+    const data = await fetch(`${API}/transactions?${params.toString()}`).then((r) => r.json());
+    setItems(Array.isArray(data) ? data : []);
   };
 
   useEffect(() => { load(); }, [filter]);
@@ -34,7 +35,7 @@ export default function Transactions() {
           <p className="text-zinc-400 text-sm mt-1">Every screenshot the bot has processed.</p>
         </div>
         <div className="flex items-center gap-2">
-          {["", "received", "not_received", "utr_not_found"].map((f) => (
+          {["", "received", "not_received", "utr_not_found", "duplicate"].map((f) => (
             <button
               key={f || "all"}
               data-testid={`filter-${f || "all"}`}

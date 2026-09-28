@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - ./data/mongo:/data/db
+    ports:
+      - "27017:27017"
+
+  backend:
+    build:
+      context: ..
+      dockerfile: local-runner/Dockerfile.backend
+    restart: unless-stopped
+    depends_on: [mongo]
+    environment:
+      MONGO_URL: "mongodb://mongo:27017"
+      DB_NAME: "payverify"
+      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
+      # LIVE MODE — flip to true to simulate GPay/WhatsApp without a browser
+      BOT_MOCK_MODE: "false"
+      # Persistent browser profiles so QR/2FA survive restarts
+      WA_PROFILE_DIR: "/data/whatsapp_profile"
+      GPAY_PROFILE_DIR: "/data/gpay_profile"
+      # Copy these three from your Emergent-hosted .env
+      EMERGENT_LLM_KEY: "${EMERGENT_LLM_KEY}"
+      EMERGENT_EMAIL_KEY: "${EMERGENT_EMAIL_KEY}"
+      EMAIL_FROM_NAME: "${EMAIL_FROM_NAME:-PayVerify Bot}"
+      WEBHOOK_CRON_SECRET: "${WEBHOOK_CRON_SECRET}"
+    volumes:
+      - ./data/browser:/data
+    ports:
+      - "8001:8001"
+
+  # Optional: run the React admin dashboard locally.
+  # If you're using the Emergent-hosted dashboard, delete this service and just
+  # point REACT_APP_BACKEND_URL there to http://localhost:8001.
+  frontend:
+    image: node:20-slim
+    working_dir: /app/frontend
+    restart: unless-stopped
+    depends_on: [backend]
+    environment:
+      REACT_APP_BACKEND_URL: "http://localhost:8001"
+      WDS_SOCKET_PORT: "0"
+    command: sh -c "corepack enable && yarn install --frozen-lockfile && yarn start"
+    volumes:
+      - ../frontend:/app/frontend
+    ports:
+      - "3000:3000"

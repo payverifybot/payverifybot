@@ -1,19 +1,21 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
+import hmac
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from ocr_service import extract_payment_details
 from gpay_service import gpay_service
 from whatsapp_service import whatsapp_service
 from bot_orchestrator import process_payment_screenshot
+from email_service import send_email, render_digest_html
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -21,6 +23,8 @@ load_dotenv(ROOT_DIR / ".env")
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ["DB_NAME"]]
+
+WEBHOOK_CRON_SECRET = os.environ.get("WEBHOOK_CRON_SECRET", "")
 
 app = FastAPI(title="PayVerify Bot")
 api = APIRouter(prefix="/api")
@@ -34,9 +38,13 @@ class Settings(BaseModel):
     id: str = Field(default_factory=lambda: "singleton")
     group_name: str = ""
     gpay_email: str = ""
+    owner_email: str = ""
+    owner_name: str = ""
+    digest_enabled: bool = False
     auto_reply: bool = True
     reply_template_success: str = "✅ Received. UTR ...{utr_last4} ({amount})"
     reply_template_fail: str = "❌ Not received. UTR ...{utr_last4} not found."
+    reply_template_duplicate: str = "⚠️ Duplicate UTR ...{utr_last4} — already submitted by {orig_sender} on {orig_time}."
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
@@ -50,9 +58,23 @@ class VerifyManualRequest(BaseModel):
     amount: Optional[str] = None
 
 
-class ManualReplyRequest(BaseModel):
-    txn_id: str
-    reply_text: str
+# ---------- Helpers ----------
+async def _compute_stats(since_iso: Optional[str] = None) -> dict:
+    q = {}
+    if since_iso:
+        q["created_at"] = {"$gte": since_iso}
+    total = await db.transactions.count_documents(q)
+    received = await db.transactions.count_documents({**q, "status": "received"})
+    not_received = await db.transactions.count_documents({**q, "status": "not_received"})
+    utr_missing = await db.transactions.count_documents({**q, "status": "utr_not_found"})
+    duplicate = await db.transactions.count_documents({**q, "status": "duplicate"})
+    return {
+        "total": total,
+        "received": received,
+        "not_received": not_received,
+        "utr_not_found": utr_missing,
+        "duplicate": duplicate,
+    }
 
 
 # ---------- Routes ----------
@@ -67,6 +89,7 @@ async def status():
         "mock_mode": os.environ.get("BOT_MOCK_MODE", "false").lower() == "true",
         "whatsapp_connected": whatsapp_service.is_connected,
         "whatsapp_qr": whatsapp_service.qr_data_url,
+        "whatsapp_error": whatsapp_service.last_error,
         "gpay_logged_in": gpay_service.is_logged_in,
         "gpay_email": gpay_service.email,
     }
@@ -95,8 +118,7 @@ async def update_settings(payload: Settings):
 # ---- GPay ----
 @api.post("/gpay/login")
 async def gpay_login(req: GPayLoginRequest):
-    result = await gpay_service.login(req.email, req.password)
-    return result
+    return await gpay_service.login(req.email, req.password)
 
 
 @api.post("/gpay/logout")
@@ -132,28 +154,25 @@ async def wa_stop():
     return {"ok": True}
 
 
-# ---- Screenshot processing (main endpoint used by dashboard + bot) ----
+# ---- Screenshot processing ----
 @api.post("/process-screenshot")
 async def process_screenshot(
     file: UploadFile = File(...),
     sender: str = Form("manual-upload"),
     auto_reply: bool = Form(False),
 ):
-    """Upload a payment screenshot; runs OCR -> GPay verify -> stores result."""
     if file.content_type not in ("image/png", "image/jpeg", "image/webp", "image/jpg"):
         raise HTTPException(400, f"Unsupported image type: {file.content_type}")
     image_bytes = await file.read()
     if len(image_bytes) > 8 * 1024 * 1024:
         raise HTTPException(400, "Image too large (max 8MB)")
-    result = await process_payment_screenshot(
+    return await process_payment_screenshot(
         db, image_bytes, sender=sender, message_id=None, auto_reply=auto_reply
     )
-    return result
 
 
 @api.post("/ocr")
 async def ocr_only(file: UploadFile = File(...)):
-    """OCR only, no verification."""
     if file.content_type not in ("image/png", "image/jpeg", "image/webp", "image/jpg"):
         raise HTTPException(400, "Unsupported image type")
     image_bytes = await file.read()
@@ -163,25 +182,13 @@ async def ocr_only(file: UploadFile = File(...)):
 # ---- Transactions ----
 @api.get("/transactions")
 async def list_transactions(limit: int = 50, status_filter: Optional[str] = None):
-    query = {}
-    if status_filter:
-        query["status"] = status_filter
-    docs = await db.transactions.find(query, {"_id": 0}).sort("created_at", -1).to_list(limit)
-    return docs
+    q = {"status": status_filter} if status_filter else {}
+    return await db.transactions.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
 
 
 @api.get("/transactions/stats")
 async def txn_stats():
-    total = await db.transactions.count_documents({})
-    received = await db.transactions.count_documents({"status": "received"})
-    not_received = await db.transactions.count_documents({"status": "not_received"})
-    utr_missing = await db.transactions.count_documents({"status": "utr_not_found"})
-    return {
-        "total": total,
-        "received": received,
-        "not_received": not_received,
-        "utr_not_found": utr_missing,
-    }
+    return await _compute_stats()
 
 
 @api.get("/transactions/{txn_id}")
@@ -194,8 +201,7 @@ async def get_txn(txn_id: str):
 
 @api.post("/transactions/{txn_id}/mark")
 async def mark_transaction(txn_id: str, status: str = Form(...)):
-    """Manually override status: received / not_received."""
-    if status not in ("received", "not_received", "utr_not_found"):
+    if status not in ("received", "not_received", "utr_not_found", "duplicate"):
         raise HTTPException(400, "Invalid status")
     r = await db.transactions.update_one(
         {"id": txn_id},
@@ -205,6 +211,68 @@ async def mark_transaction(txn_id: str, status: str = Form(...)):
     if r.matched_count == 0:
         raise HTTPException(404, "Not found")
     return {"ok": True}
+
+
+# ---- Daily Digest ----
+async def _send_daily_digest() -> dict:
+    settings_doc = await db.settings.find_one({"id": "singleton"}, {"_id": 0}) or {}
+    owner_email = (settings_doc.get("owner_email") or "").strip()
+    if not settings_doc.get("digest_enabled") or not owner_email:
+        return {"sent": False, "reason": "digest disabled or owner_email missing"}
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    stats = await _compute_stats(since_iso=since)
+    recent = await db.transactions.find(
+        {"created_at": {"$gte": since}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+    html = render_digest_html(stats, recent, owner_name=settings_doc.get("owner_name") or "there")
+    email_id = await send_email(
+        to=owner_email,
+        subject=f"Daily payment digest — {stats['received']} received, {stats['not_received']} not received",
+        html=html,
+    )
+    await db.digests.insert_one({
+        "id": str(uuid.uuid4()),
+        "sent_at": datetime.now(timezone.utc).isoformat(),
+        "to": owner_email,
+        "email_id": email_id,
+        "stats": stats,
+    })
+    return {"sent": True, "email_id": email_id, "stats": stats, "to": owner_email}
+
+
+@api.post("/digest/send-now")
+async def digest_send_now():
+    """Manual trigger from the dashboard."""
+    return await _send_daily_digest()
+
+
+@api.post("/cron/digest")
+async def cron_digest(request: Request):
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    auth = request.headers.get("authorization", "")
+    if not auth.startswith("Bearer ") or not WEBHOOK_CRON_SECRET:
+        raise HTTPException(401, "unauthorized")
+    token = auth.split(" ", 1)[1]
+    if not hmac.compare_digest(token, WEBHOOK_CRON_SECRET):
+        raise HTTPException(401, "unauthorized")
+
+    run_id = request.headers.get("x-webhook-id") or str(uuid.uuid4())
+    if await db.cron_runs.find_one({"run_id": run_id}):
+        return {"ok": True, "duplicate": True}
+    await db.cron_runs.insert_one({
+        "run_id": run_id,
+        "kind": "digest",
+        "received_at": datetime.now(timezone.utc).isoformat(),
+    })
+    # Background the actual send so we ack 2xx fast
+    import asyncio
+    asyncio.create_task(_send_daily_digest())
+    return {"ok": True, "run_id": run_id}
+
+
+@api.get("/digest/history")
+async def digest_history(limit: int = 20):
+    return await db.digests.find({}, {"_id": 0}).sort("sent_at", -1).to_list(limit)
 
 
 app.include_router(api)

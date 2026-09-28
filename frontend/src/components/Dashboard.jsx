@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { API } from "@/App";
-import { CheckCircle2, XCircle, HelpCircle, Activity, TrendingUp } from "lucide-react";
+import { CheckCircle2, XCircle, HelpCircle, Activity, TrendingUp, Copy, Mail, Loader2 } from "lucide-react";
 
 export default function Dashboard() {
-  const [stats, setStats] = useState({ total: 0, received: 0, not_received: 0, utr_not_found: 0 });
+  const [stats, setStats] = useState({ total: 0, received: 0, not_received: 0, utr_not_found: 0, duplicate: 0 });
   const [recent, setRecent] = useState([]);
   const [status, setStatus] = useState(null);
+  const [digestMsg, setDigestMsg] = useState(null);
+  const [sendingDigest, setSendingDigest] = useState(false);
 
   const load = async () => {
     try {
@@ -16,6 +18,19 @@ export default function Dashboard() {
       ]);
       setStats(s); setRecent(r); setStatus(st);
     } catch (e) { console.error(e); }
+  };
+
+  const sendDigestNow = async () => {
+    setSendingDigest(true); setDigestMsg(null);
+    try {
+      const r = await fetch(`${API}/digest/send-now`, { method: "POST" }).then((r) => r.json());
+      if (r.sent) setDigestMsg(`Sent to ${r.to} · ${r.stats.received} received / ${r.stats.not_received} not received`);
+      else setDigestMsg(r.reason || "Not sent");
+    } catch (e) {
+      setDigestMsg(String(e));
+    } finally {
+      setSendingDigest(false);
+    }
   };
 
   useEffect(() => {
@@ -31,11 +46,12 @@ export default function Dashboard() {
         <p className="text-zinc-400 mt-1 text-sm">Real-time status of your payment verification bot.</p>
       </section>
 
-      <section className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <section className="grid grid-cols-1 md:grid-cols-5 gap-4">
         <StatCard testid="stat-total"        icon={<Activity className="w-5 h-5" />}     label="Total processed" value={stats.total} accent="zinc" />
         <StatCard testid="stat-received"     icon={<CheckCircle2 className="w-5 h-5" />} label="Received"        value={stats.received} accent="emerald" />
         <StatCard testid="stat-not-received" icon={<XCircle className="w-5 h-5" />}      label="Not received"    value={stats.not_received} accent="rose" />
         <StatCard testid="stat-utr-missing"  icon={<HelpCircle className="w-5 h-5" />}   label="UTR unreadable"  value={stats.utr_not_found} accent="amber" />
+        <StatCard testid="stat-duplicate"    icon={<Copy className="w-5 h-5" />}         label="Duplicate"       value={stats.duplicate || 0} accent="violet" />
       </section>
 
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -69,6 +85,21 @@ export default function Dashboard() {
           <RowKV k="Mock mode" v={String(!!status?.mock_mode)} testid="row-mock" />
           <RowKV k="WhatsApp"  v={status?.whatsapp_connected ? "connected" : "offline"} testid="row-wa" />
           <RowKV k="GPay"      v={status?.gpay_logged_in ? (status?.gpay_email || "connected") : "offline"} testid="row-gpay" />
+          <div className="border-t border-zinc-800 pt-4 space-y-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
+              <Mail className="w-4 h-4 text-emerald-400" /> Daily digest
+            </div>
+            <button
+              data-testid="btn-digest-now"
+              onClick={sendDigestNow}
+              disabled={sendingDigest}
+              className="w-full inline-flex items-center justify-center gap-2 text-xs py-2 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 disabled:opacity-50"
+            >
+              {sendingDigest ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+              Send digest now
+            </button>
+            {digestMsg && <p data-testid="digest-msg" className="text-xs text-zinc-400 leading-relaxed">{digestMsg}</p>}
+          </div>
           {status?.mock_mode && (
             <p className="text-xs text-amber-300/80 leading-relaxed border-t border-zinc-800 pt-3">
               Mock mode: GPay & WhatsApp are simulated. UTRs ending in an even digit are marked {"\"received\""}, odd digit {"\"not received\""}. Turn off in <code className="text-emerald-300">BOT_MOCK_MODE</code> to use live automation.
@@ -86,6 +117,7 @@ function StatCard({ icon, label, value, accent, testid }) {
     rose: "text-rose-300 border-rose-500/30 bg-rose-500/5",
     amber: "text-amber-300 border-amber-500/30 bg-amber-500/5",
     zinc: "text-zinc-200 border-zinc-800 bg-zinc-900/40",
+    violet: "text-violet-300 border-violet-500/30 bg-violet-500/5",
   };
   return (
     <div data-testid={testid} className={`rounded-xl border p-4 ${map[accent]}`}>
@@ -107,11 +139,13 @@ function RowKV({ k, v, testid }) {
 export function StatusIcon({ status }) {
   if (status === "received") return <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />;
   if (status === "not_received") return <XCircle className="w-5 h-5 text-rose-400 shrink-0" />;
+  if (status === "duplicate") return <Copy className="w-5 h-5 text-violet-400 shrink-0" />;
   return <HelpCircle className="w-5 h-5 text-amber-400 shrink-0" />;
 }
 
 export function badgeCls(status) {
   if (status === "received") return "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30";
   if (status === "not_received") return "bg-rose-500/10 text-rose-300 border border-rose-500/30";
+  if (status === "duplicate") return "bg-violet-500/10 text-violet-300 border border-violet-500/30";
   return "bg-amber-500/10 text-amber-300 border border-amber-500/30";
 }

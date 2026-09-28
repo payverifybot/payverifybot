@@ -1,13 +1,18 @@
 """WhatsApp Web automation via Playwright.
 
-- Logs in via QR code (persistent profile so scan happens once).
-- Watches a configured group for image messages.
-- For each new image message, downloads it and hands off to the bot orchestrator.
-- Sends reply as a quoted reply to the payment message.
+Real DOM watcher for a target group:
+  - persistent chromium profile (survives QR scan across restarts)
+  - opens web.whatsapp.com, locates the group by name
+  - polls the message pane for NEW image messages (unseen ids)
+  - downloads each image via a canvas.toBlob trick (survives WA's blob URLs)
+  - calls on_image(sender, image_bytes, message_id) for each new one
+  - send_reply() clicks reply-to on a message and posts text
 
-Set BOT_MOCK_MODE=true to simulate.
+Set BOT_MOCK_MODE=true to simulate (no browser).
 """
 import os
+import re
+import base64
 import asyncio
 import logging
 from pathlib import Path
@@ -19,7 +24,59 @@ logger = logging.getLogger(__name__)
 
 MOCK_MODE = os.environ.get("BOT_MOCK_MODE", "false").lower() == "true"
 WA_URL = "https://web.whatsapp.com/"
-USER_DATA_DIR = Path("/tmp/whatsapp_profile")
+USER_DATA_DIR = Path(os.environ.get("WA_PROFILE_DIR", "/tmp/whatsapp_profile"))
+POLL_INTERVAL = float(os.environ.get("WA_POLL_INTERVAL", "3"))
+
+
+# JS run in-page to enumerate image messages currently rendered in the open chat.
+# Returns a list of { id, sender, dataUrl }. WA's messages have a
+# data-id attribute like "true_120363@g.us_ABCDEF..." and image bubbles contain
+# a rendered <img> whose src is a blob: URL. We paint the <img> onto a canvas
+# and export as a data URL so Python can pull the bytes back with one call.
+_JS_EXTRACT_IMAGES = r"""
+async () => {
+  const rows = document.querySelectorAll('div[role="row"], div._amjy, div.message-in, div.message-out');
+  const out = [];
+  for (const row of rows) {
+    const idEl = row.querySelector('[data-id]');
+    const id = idEl ? idEl.getAttribute('data-id') : null;
+    if (!id) continue;
+    const img = row.querySelector('img[src^="blob:"]');
+    if (!img) continue;
+    // sender: for group chats, WA renders a colored span above the bubble
+    const senderEl = row.querySelector('span._ao3e, [aria-label]');
+    const sender = senderEl ? (senderEl.getAttribute('aria-label') || senderEl.textContent || '').trim() : '';
+    try {
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      out.push({ id, sender, dataUrl: c.toDataURL('image/jpeg', 0.92) });
+    } catch (e) { /* skip */ }
+  }
+  return out;
+}
+"""
+
+_JS_OPEN_GROUP = r"""
+async (name) => {
+  // click the search box
+  const searchBtn = document.querySelector('button[aria-label="Search or start new chat"], div[aria-label="Search input textbox"]');
+  if (searchBtn) searchBtn.click();
+  await new Promise(r => setTimeout(r, 300));
+  const search = document.querySelector('div[contenteditable="true"][data-tab="3"], div[contenteditable="true"][role="textbox"]');
+  if (!search) return { ok: false, reason: "no-search-box" };
+  search.focus();
+  document.execCommand('selectAll', false, null);
+  document.execCommand('insertText', false, name);
+  await new Promise(r => setTimeout(r, 600));
+  const rows = document.querySelectorAll('div[role="listitem"], div._ak8l');
+  for (const r of rows) {
+    if ((r.textContent || '').includes(name)) { r.click(); return { ok: true }; }
+  }
+  return { ok: false, reason: "not-found" };
+}
+"""
 
 
 class WhatsAppService:
@@ -32,6 +89,8 @@ class WhatsAppService:
         self._group_name: Optional[str] = None
         self._monitor_task: Optional[asyncio.Task] = None
         self._on_image_callback: Optional[Callable[[str, bytes, str], Awaitable[None]]] = None
+        self._seen_ids: set[str] = set()
+        self._last_error: Optional[str] = None
 
     @property
     def is_connected(self) -> bool:
@@ -41,13 +100,19 @@ class WhatsAppService:
     def qr_data_url(self) -> Optional[str]:
         return self._qr_data_url
 
+    @property
+    def last_error(self) -> Optional[str]:
+        return self._last_error
+
     async def start(self, group_name: str, on_image):
         self._group_name = group_name
         self._on_image_callback = on_image
+        self._last_error = None
+
         if MOCK_MODE:
             self._connected = True
             self._qr_data_url = None
-            logger.info("WhatsApp service started (mock mode) for group %s", group_name)
+            logger.info("WhatsApp (mock) started for group %s", group_name)
             return {"ok": True, "mock": True}
 
         try:
@@ -57,40 +122,130 @@ class WhatsAppService:
             self._browser = await self._playwright.chromium.launch_persistent_context(
                 str(USER_DATA_DIR),
                 headless=True,
-                args=["--no-sandbox"],
+                args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
             )
             self._page = self._browser.pages[0] if self._browser.pages else await self._browser.new_page()
             await self._page.goto(WA_URL, wait_until="domcontentloaded", timeout=60000)
-            # Grab QR canvas if present
+
+            # Wait either for QR (fresh) or chat list (restored session)
+            try:
+                await self._page.wait_for_selector(
+                    'canvas[aria-label*="Scan"], [data-testid="chat-list"], [aria-label="Chat list"]',
+                    timeout=120000,
+                )
+            except Exception:
+                pass
+
             qr = await self._page.query_selector('canvas[aria-label*="Scan"]')
             if qr:
-                self._qr_data_url = "data:image/png;base64," + (await qr.screenshot()).hex()
-            # Wait for chat list
+                png = await qr.screenshot(type="png")
+                self._qr_data_url = "data:image/png;base64," + base64.b64encode(png).decode()
+                # Wait up to 3 minutes for QR to be scanned
+                try:
+                    await self._page.wait_for_selector('[data-testid="chat-list"], [aria-label="Chat list"]', timeout=180000)
+                    self._qr_data_url = None
+                except Exception:
+                    self._last_error = "QR not scanned in time"
+                    self._connected = False
+                    return {"ok": False, "error": self._last_error}
+
+            self._connected = True
+            # Open the group
+            result = await self._page.evaluate(_JS_OPEN_GROUP, group_name)
+            if not result.get("ok"):
+                self._last_error = f"Group '{group_name}' not found: {result.get('reason')}"
+                logger.warning(self._last_error)
+
+            # Prime seen-ids with everything currently on screen (so we only react to NEW msgs)
+            await asyncio.sleep(1.5)
             try:
-                await self._page.wait_for_selector('[data-testid="chat-list"]', timeout=120000)
-                self._connected = True
+                current = await self._page.evaluate(_JS_EXTRACT_IMAGES)
+                self._seen_ids = {m["id"] for m in current if m.get("id")}
             except Exception:
-                self._connected = False
+                self._seen_ids = set()
 
             self._monitor_task = asyncio.create_task(self._monitor_loop())
-            return {"ok": self._connected}
+            return {"ok": True}
         except Exception as e:
             logger.exception("WhatsApp start failed")
+            self._last_error = str(e)
             return {"ok": False, "error": str(e)}
 
     async def _monitor_loop(self):
-        # This is a stub — a real implementation needs to open the group,
-        # observe DOM changes for new image messages, download each, and call
-        # self._on_image_callback(sender, image_bytes, message_id).
         while True:
-            await asyncio.sleep(5)
+            try:
+                await asyncio.sleep(POLL_INTERVAL)
+                if not self._page or not self._connected:
+                    continue
+                messages = await self._page.evaluate(_JS_EXTRACT_IMAGES)
+                for m in messages:
+                    mid = m.get("id")
+                    if not mid or mid in self._seen_ids:
+                        continue
+                    self._seen_ids.add(mid)
+                    data_url = m.get("dataUrl") or ""
+                    if "," not in data_url:
+                        continue
+                    b64 = data_url.split(",", 1)[1]
+                    try:
+                        image_bytes = base64.b64decode(b64)
+                    except Exception:
+                        continue
+                    sender = m.get("sender") or "unknown"
+                    logger.info("New WA image from %s (msg=%s, %d bytes)", sender, mid, len(image_bytes))
+                    if self._on_image_callback:
+                        try:
+                            await self._on_image_callback(sender, image_bytes, mid)
+                        except Exception:
+                            logger.exception("on_image callback failed")
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("WA monitor loop error")
 
     async def send_reply(self, message_id: str, text: str) -> bool:
         if MOCK_MODE:
             logger.info("[MOCK WA reply] msg=%s -> %s", message_id, text)
             return True
-        # Real implementation: locate msg by id, click reply, type & send.
-        return False
+        if not self._page:
+            return False
+        try:
+            # Find the message row, hover, click the menu, click Reply, type, send
+            js = r"""
+            async ([msgId, text]) => {
+              const row = document.querySelector(`[data-id="${msgId}"]`)?.closest('div[role="row"], div._amjy');
+              if (!row) return { ok: false, reason: 'row-not-found' };
+              row.scrollIntoView({block: 'center'});
+              const evt = (type) => row.dispatchEvent(new MouseEvent(type, {bubbles:true}));
+              evt('mouseover'); evt('mousemove');
+              await new Promise(r => setTimeout(r, 200));
+              const menuBtn = row.querySelector('[aria-label="Context menu"], [data-icon="down-context"]');
+              if (!menuBtn) return { ok: false, reason: 'no-menu' };
+              menuBtn.click();
+              await new Promise(r => setTimeout(r, 250));
+              const items = document.querySelectorAll('[role="menuitem"], li');
+              let clicked = false;
+              for (const it of items) {
+                if ((it.textContent || '').trim().toLowerCase().startsWith('reply')) { it.click(); clicked = true; break; }
+              }
+              if (!clicked) return { ok: false, reason: 'no-reply-item' };
+              await new Promise(r => setTimeout(r, 250));
+              const box = document.querySelector('footer div[contenteditable="true"][role="textbox"]');
+              if (!box) return { ok: false, reason: 'no-input' };
+              box.focus();
+              document.execCommand('insertText', false, text);
+              await new Promise(r => setTimeout(r, 200));
+              const sendBtn = document.querySelector('button[aria-label="Send"], [data-icon="send"]');
+              if (sendBtn) sendBtn.click();
+              else box.dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+              return { ok: true };
+            }
+            """
+            res = await self._page.evaluate(js, [message_id, text])
+            return bool(res and res.get("ok"))
+        except Exception:
+            logger.exception("send_reply failed")
+            return False
 
     async def stop(self):
         if self._monitor_task:
@@ -103,6 +258,9 @@ class WhatsAppService:
         except Exception:
             pass
         self._connected = False
+        self._page = None
+        self._browser = None
+        self._qr_data_url = None
 
 
 whatsapp_service = WhatsAppService()

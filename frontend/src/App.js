@@ -26,31 +26,31 @@ function Shell({ children }) {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
       <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur sticky top-0 z-20">
-        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center gap-6">
+        <div className="max-w-6xl mx-auto px-4 md:px-6 py-3 md:py-4 flex flex-wrap items-center gap-3 md:gap-6">
           <div className="flex items-center gap-2">
-            <Bot className="w-6 h-6 text-emerald-400" />
-            <span className="font-semibold tracking-tight">PayVerify Bot</span>
+            <Bot className="w-5 h-5 md:w-6 md:h-6 text-emerald-400" />
+            <span className="font-semibold tracking-tight text-sm md:text-base">PayVerify Bot</span>
             {status?.mock_mode && (
-              <span data-testid="mock-badge" className="ml-2 text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                Mock Mode
+              <span data-testid="mock-badge" className="ml-1 text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                Mock
               </span>
             )}
           </div>
-          <nav className="flex items-center gap-1 ml-4">
+          <nav className="flex items-center gap-1 overflow-x-auto scrollbar-hide -mx-1 px-1 order-3 w-full md:order-none md:w-auto">
             <NavLink data-testid="nav-dashboard" end to="/" className={({ isActive }) => `${link} ${isActive ? active : idle}`}>
-              <CircleCheckBig className="w-4 h-4" /> Dashboard
+              <CircleCheckBig className="w-4 h-4" /> <span className="hidden sm:inline">Dashboard</span>
             </NavLink>
             <NavLink data-testid="nav-transactions" to="/transactions" className={({ isActive }) => `${link} ${isActive ? active : idle}`}>
-              <ScrollText className="w-4 h-4" /> Transactions
+              <ScrollText className="w-4 h-4" /> <span className="hidden sm:inline">Transactions</span>
             </NavLink>
             <NavLink data-testid="nav-test" to="/test" className={({ isActive }) => `${link} ${isActive ? active : idle}`}>
-              <Upload className="w-4 h-4" /> Test Upload
+              <Upload className="w-4 h-4" /> <span className="hidden sm:inline">Test Upload</span>
             </NavLink>
             <NavLink data-testid="nav-setup" to="/setup" className={({ isActive }) => `${link} ${isActive ? active : idle}`}>
-              <Settings2 className="w-4 h-4" /> Setup
+              <Settings2 className="w-4 h-4" /> <span className="hidden sm:inline">Setup</span>
             </NavLink>
           </nav>
-          <div className="ml-auto flex items-center gap-3 text-xs">
+          <div className="ml-auto flex items-center gap-2 text-xs">
             <StatusPill label="WhatsApp" ok={status?.whatsapp_connected} testid="pill-wa" />
             <StatusPill label="GPay" ok={status?.gpay_logged_in} testid="pill-gpay" />
           </div>

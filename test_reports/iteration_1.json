@@ -1,0 +1,45 @@
+{
+  "summary": "First-pass smoke test of PayVerify Bot backend + frontend. Backend endpoints (root, status, settings CRUD, gpay/login, whatsapp/start incl. 400 branch, process-screenshot for even/odd/plain UTR and non-image, transactions list/stats/get/404/mark) all pass. OCR via Gemini correctly extracts UTR 540298761234/540298761233 from synthetic PIL receipts and mock verify returns received (even) / not_received (odd). Frontend Dashboard, Test Upload, and Setup pages work end-to-end. Transactions page throws a runtime error 'items.map is not a function' due to malformed URL when no filter is selected.",
+  "tested_scope": ["backend", "frontend", "integration"],
+  "passed": [
+    "GET /api/ -> {service:'PayVerify Bot', mock_mode:'true'}",
+    "GET /api/status -> mock_mode true; whatsapp_connected & gpay_logged_in flip correctly after start/login",
+    "GET /api/settings creates & returns singleton on first call",
+    "PUT /api/settings persists group_name/auto_reply/templates across GETs",
+    "POST /api/gpay/login -> ok:true, mock:true; status reflects gpay_logged_in true and email set",
+    "POST /api/whatsapp/start with group_name -> ok:true, mock:true; without group_name -> HTTP 400",
+    "POST /api/process-screenshot even UTR (540298761234) -> status='received', utr_last4='1234', reply starts '✅ Received.'",
+    "POST /api/process-screenshot odd UTR (540298761233) -> status='not_received', reply starts '❌ Not received.'",
+    "POST /api/process-screenshot plain image -> status='utr_not_found' with 'Could not read UTR' reply",
+    "POST /api/process-screenshot with text/plain -> HTTP 400 'Unsupported image type'",
+    "GET /api/transactions returns list in reverse chrono order; ?limit and ?status_filter=received both work",
+    "GET /api/transactions/stats returns counts matching processed txns (total:4, received:2, not_received:1, utr_not_found:1 pre-override)",
+    "GET /api/transactions/{id} returns single txn; unknown id -> 404",
+    "POST /api/transactions/{id}/mark updates status and adds manually_overridden:true",
+    "Frontend Dashboard loads, shows stat cards (stat-total/received/not-received/utr-missing), MOCK badge, and WhatsApp/GPay status pills",
+    "Frontend /test: uploading PNG -> shows Received, UTR 540298761234, last4 1234, ₹1500, and reply preview '✅ Received. UTR ...1234'",
+    "Frontend /setup: renders group name, templates, GPay section with 'connected' pill; Save settings works",
+    "Nav links nav-dashboard/nav-transactions/nav-test/nav-setup route correctly"
+  ],
+  "failed": [
+    {
+      "area": "frontend / Transactions page",
+      "issue": "Runtime error 'items.map is not a function' when navigating to /transactions with no filter selected. Root cause: /app/frontend/src/components/Transactions.jsx line 12 builds URL as `${API}/transactions${q}&limit=100`.replace('?&','?'). When filter is empty, q='' and the URL becomes `${API}/transactions&limit=100` (no '?'), which hits FastAPI as an unknown path and returns 404 JSON `{detail:'Not Found'}`. That object is then passed to setItems, breaking items.map. Backend list endpoint itself works fine.",
+      "evidence": "Browser console: 'Failed to load resource: 404' on /api/transactions&limit=100, followed by React error overlay 'items.map is not a function' at bundle.js:3015. Confirmed backend GET /api/transactions?limit=100 returns array normally.",
+      "priority": "HIGH"
+    },
+    {
+      "area": "backend / reply template (minor)",
+      "issue": "Success reply_text is '✅ Received. UTR ...1234' — the '({amount})' portion of the configured reply_template_success is not rendered (amount 1500 omitted). Failure reply uses a hardcoded 'not found in GPay Business.' suffix instead of the configured reply_template_fail. bot_orchestrator likely bypasses the template. Not blocking first-finish since spec only requires reply_text prefix.",
+      "evidence": "process-screenshot response reply_text='✅ Received. UTR ...1234' and '❌ Not received. UTR ...1233 not found in GPay Business.' while settings template is '✅ Received. UTR ...{utr_last4} ({amount})' / '❌ Not received. UTR ...{utr_last4} not found.'",
+      "priority": "LOW"
+    }
+  ],
+  "action_items": [
+    "Fix Transactions.jsx load(): build URL cleanly, e.g. `${API}/transactions?${new URLSearchParams({limit:100, ...(filter?{status_filter:filter}:{})}).toString()}`, and guard setItems(Array.isArray(data)?data:[]).",
+    "(Optional/low) Make bot_orchestrator.build_reply actually apply settings.reply_template_success/fail with {utr_last4} and {amount} placeholders instead of hardcoded strings."
+  ],
+  "success_rate": {"backend": "100%", "frontend": "75%"},
+  "retest_needed": true,
+  "full_testing_deferred": true
+}
