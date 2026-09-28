@@ -108,9 +108,12 @@ async def get_settings():
         s = Settings()
         await db.settings.insert_one(s.model_dump())
         return s
-    # Backwards-compat migration: single group_name -> group_names
+    # Backwards-compat migration: single group_name -> group_names (persist once)
     if not doc.get("group_names") and doc.get("group_name"):
         doc["group_names"] = [doc["group_name"]]
+        await db.settings.update_one(
+            {"id": "singleton"}, {"$set": {"group_names": doc["group_names"]}}
+        )
     return Settings(**doc)
 
 
