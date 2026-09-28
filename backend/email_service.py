@@ -135,13 +135,14 @@ def render_digest_html(stats: dict, recent: list, owner_name: str = "there") -> 
         rows += (
             f'<tr>'
             f'<td style="padding:8px 10px;border-bottom:1px solid #eee;font-family:Arial,sans-serif;font-size:13px;color:#333">{h(t.get("sender") or "-")}</td>'
+            f'<td style="padding:8px 10px;border-bottom:1px solid #eee;font-family:Arial,sans-serif;font-size:12px;color:#666">{h(t.get("group") or "-")}</td>'
             f'<td style="padding:8px 10px;border-bottom:1px solid #eee;font-family:monospace;font-size:12px;color:#666">...{h(t.get("utr_last4") or "----")}</td>'
             f'<td style="padding:8px 10px;border-bottom:1px solid #eee;font-family:Arial,sans-serif;font-size:13px;color:#333">Rs {h(str(t.get("amount") or "-"))}</td>'
             f'<td style="padding:8px 10px;border-bottom:1px solid #eee;font-family:Arial,sans-serif;font-size:12px;color:{color};font-weight:600">{h((t.get("status") or "").replace("_"," "))}</td>'
             f'</tr>'
         )
     if not rows:
-        rows = ('<tr><td colspan="4" style="padding:16px;text-align:center;'
+        rows = ('<tr><td colspan="5" style="padding:16px;text-align:center;'
                 'font-family:Arial,sans-serif;font-size:13px;color:#999">'
                 'No transactions processed today.</td></tr>')
 

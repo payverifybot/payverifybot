@@ -86,11 +86,12 @@ class WhatsAppService:
         self._page = None
         self._connected = False
         self._qr_data_url: Optional[str] = None
-        self._group_name: Optional[str] = None
+        self._group_names: list[str] = []
         self._monitor_task: Optional[asyncio.Task] = None
-        self._on_image_callback: Optional[Callable[[str, bytes, str], Awaitable[None]]] = None
-        self._seen_ids: set[str] = set()
+        self._on_image_callback = None
+        self._seen_by_group: dict[str, set[str]] = {}
         self._last_error: Optional[str] = None
+        self._active_group: Optional[str] = None
 
     @property
     def is_connected(self) -> bool:
@@ -104,16 +105,28 @@ class WhatsAppService:
     def last_error(self) -> Optional[str]:
         return self._last_error
 
-    async def start(self, group_name: str, on_image):
-        self._group_name = group_name
+    @property
+    def active_group(self) -> Optional[str]:
+        return self._active_group
+
+    @property
+    def group_names(self) -> list[str]:
+        return list(self._group_names)
+
+    async def start(self, group_names, on_image):
+        # Accept either a single string (backwards compat) or a list
+        if isinstance(group_names, str):
+            group_names = [g.strip() for g in group_names.split(",") if g.strip()]
+        self._group_names = [g for g in (group_names or []) if g]
         self._on_image_callback = on_image
         self._last_error = None
+        self._seen_by_group = {g: set() for g in self._group_names}
 
         if MOCK_MODE:
             self._connected = True
             self._qr_data_url = None
-            logger.info("WhatsApp (mock) started for group %s", group_name)
-            return {"ok": True, "mock": True}
+            logger.info("WhatsApp (mock) started for groups %s", self._group_names)
+            return {"ok": True, "mock": True, "groups": self._group_names}
 
         try:
             from playwright.async_api import async_playwright
@@ -127,7 +140,6 @@ class WhatsAppService:
             self._page = self._browser.pages[0] if self._browser.pages else await self._browser.new_page()
             await self._page.goto(WA_URL, wait_until="domcontentloaded", timeout=60000)
 
-            # Wait either for QR (fresh) or chat list (restored session)
             try:
                 await self._page.wait_for_selector(
                     'canvas[aria-label*="Scan"], [data-testid="chat-list"], [aria-label="Chat list"]',
@@ -140,7 +152,6 @@ class WhatsAppService:
             if qr:
                 png = await qr.screenshot(type="png")
                 self._qr_data_url = "data:image/png;base64," + base64.b64encode(png).decode()
-                # Wait up to 3 minutes for QR to be scanned
                 try:
                     await self._page.wait_for_selector('[data-testid="chat-list"], [aria-label="Chat list"]', timeout=180000)
                     self._qr_data_url = None
@@ -150,52 +161,60 @@ class WhatsAppService:
                     return {"ok": False, "error": self._last_error}
 
             self._connected = True
-            # Open the group
-            result = await self._page.evaluate(_JS_OPEN_GROUP, group_name)
-            if not result.get("ok"):
-                self._last_error = f"Group '{group_name}' not found: {result.get('reason')}"
-                logger.warning(self._last_error)
-
-            # Prime seen-ids with everything currently on screen (so we only react to NEW msgs)
-            await asyncio.sleep(1.5)
-            try:
-                current = await self._page.evaluate(_JS_EXTRACT_IMAGES)
-                self._seen_ids = {m["id"] for m in current if m.get("id")}
-            except Exception:
-                self._seen_ids = set()
-
             self._monitor_task = asyncio.create_task(self._monitor_loop())
-            return {"ok": True}
+            return {"ok": True, "groups": self._group_names}
         except Exception as e:
             logger.exception("WhatsApp start failed")
             self._last_error = str(e)
             return {"ok": False, "error": str(e)}
 
     async def _monitor_loop(self):
+        """Rotate through configured groups. On first visit to a group we PRIME
+        seen_ids (so history isn't reprocessed); on subsequent visits we emit
+        only images with a new data-id."""
+        idx = 0
         while True:
             try:
                 await asyncio.sleep(POLL_INTERVAL)
-                if not self._page or not self._connected:
+                if not self._page or not self._connected or not self._group_names:
                     continue
+                group = self._group_names[idx % len(self._group_names)]
+                idx += 1
+                self._active_group = group
+
+                # Switch to this chat
+                open_res = await self._page.evaluate(_JS_OPEN_GROUP, group)
+                if not open_res.get("ok"):
+                    logger.warning("Could not open group %s: %s", group, open_res.get("reason"))
+                    continue
+                await asyncio.sleep(1.2)
+
                 messages = await self._page.evaluate(_JS_EXTRACT_IMAGES)
+                seen = self._seen_by_group.setdefault(group, set())
+                first_visit = not seen
+                if first_visit:
+                    # Prime — don't re-process history
+                    seen.update(m["id"] for m in messages if m.get("id"))
+                    continue
+
                 for m in messages:
                     mid = m.get("id")
-                    if not mid or mid in self._seen_ids:
+                    if not mid or mid in seen:
                         continue
-                    self._seen_ids.add(mid)
+                    seen.add(mid)
                     data_url = m.get("dataUrl") or ""
                     if "," not in data_url:
                         continue
-                    b64 = data_url.split(",", 1)[1]
                     try:
-                        image_bytes = base64.b64decode(b64)
+                        image_bytes = base64.b64decode(data_url.split(",", 1)[1])
                     except Exception:
                         continue
                     sender = m.get("sender") or "unknown"
-                    logger.info("New WA image from %s (msg=%s, %d bytes)", sender, mid, len(image_bytes))
+                    logger.info("[%s] New image from %s (msg=%s, %d bytes)",
+                                group, sender, mid, len(image_bytes))
                     if self._on_image_callback:
                         try:
-                            await self._on_image_callback(sender, image_bytes, mid)
+                            await self._on_image_callback(sender, image_bytes, mid, group)
                         except Exception:
                             logger.exception("on_image callback failed")
             except asyncio.CancelledError:

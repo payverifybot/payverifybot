@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { API } from "@/App";
-import { Save, LogIn, Play, Square, Loader2 } from "lucide-react";
+import { Save, LogIn, Play, Square, Loader2, X, Plus } from "lucide-react";
 
 export default function Setup() {
   const [settings, setSettings] = useState(null);
@@ -60,10 +60,10 @@ export default function Setup() {
       {/* Bot settings */}
       <section className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-6 space-y-4">
         <h2 className="text-lg font-semibold">Bot settings</h2>
-        <Field label="WhatsApp group name" testid="input-group">
-          <input value={settings.group_name} onChange={(e) => setSettings({ ...settings, group_name: e.target.value })}
-                 className="input" placeholder="e.g. Orders — Payments" />
-        </Field>
+        <GroupChips
+          values={settings.group_names || []}
+          onChange={(list) => setSettings({ ...settings, group_names: list })}
+        />
         <Field label="Success reply template" testid="input-tpl-ok">
           <input value={settings.reply_template_success} onChange={(e) => setSettings({ ...settings, reply_template_success: e.target.value })} className="input" />
           <p className="hint">Placeholders: {"{utr_last4}"}, {"{amount}"}</p>
@@ -132,6 +132,15 @@ export default function Setup() {
             {status?.whatsapp_connected ? "connected" : "offline"}
           </span>
         </div>
+        {status?.whatsapp_groups?.length > 0 && (
+          <div data-testid="active-groups" className="text-xs text-zinc-400">
+            Watching: {status.whatsapp_groups.map((g) => (
+              <span key={g} className={`inline-block px-2 py-0.5 mx-0.5 rounded-full border ${g === status?.whatsapp_active_group ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : "border-zinc-700 text-zinc-300"}`}>
+                {g}{g === status?.whatsapp_active_group ? " • active" : ""}
+              </span>
+            ))}
+          </div>
+        )}
         {status?.whatsapp_qr ? (
           <div className="text-center">
             <img src={status.whatsapp_qr} alt="Scan QR" className="mx-auto w-56 h-56 rounded bg-white p-2" />
@@ -156,5 +165,50 @@ function Field({ label, children, testid }) {
       <label className="text-xs uppercase tracking-wide text-zinc-400">{label}</label>
       {children}
     </div>
+  );
+}
+
+function GroupChips({ values, onChange }) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    const v = draft.trim();
+    if (!v) return;
+    if (values.includes(v)) { setDraft(""); return; }
+    onChange([...values, v]);
+    setDraft("");
+  };
+  return (
+    <Field label="WhatsApp groups to watch" testid="input-groups">
+      <div className="flex flex-wrap gap-2 mb-2 min-h-[28px]">
+        {values.length === 0 && (
+          <span data-testid="groups-empty" className="text-xs text-zinc-500 py-1">No groups added yet.</span>
+        )}
+        {values.map((g) => (
+          <span key={g} data-testid={`chip-${g}`} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs">
+            {g}
+            <button
+              data-testid={`chip-remove-${g}`}
+              onClick={() => onChange(values.filter((x) => x !== g))}
+              className="hover:text-rose-300"
+              aria-label={`Remove ${g}`}
+            ><X className="w-3 h-3" /></button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <input
+          data-testid="input-new-group"
+          className="input flex-1"
+          placeholder="Group name (exactly as it appears in WhatsApp)"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(); } }}
+        />
+        <button data-testid="btn-add-group" onClick={add} className="btn-secondary">
+          <Plus className="w-4 h-4" /> Add
+        </button>
+      </div>
+      <p className="hint">Add as many as you like — the bot rotates through them every few seconds. Save settings after editing, then Start session.</p>
+    </Field>
   );
 }

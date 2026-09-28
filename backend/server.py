@@ -37,7 +37,8 @@ logger = logging.getLogger(__name__)
 # ---------- Models ----------
 class Settings(BaseModel):
     id: str = Field(default_factory=lambda: "singleton")
-    group_name: str = ""
+    group_name: str = ""                        # legacy single group (kept for backwards compat)
+    group_names: List[str] = Field(default_factory=list)  # source of truth for multi-group
     gpay_email: str = ""
     owner_email: str = ""
     owner_name: str = ""
@@ -60,10 +61,12 @@ class VerifyManualRequest(BaseModel):
 
 
 # ---------- Helpers ----------
-async def _compute_stats(since_iso: Optional[str] = None) -> dict:
-    q = {}
+async def _compute_stats(since_iso: Optional[str] = None, group: Optional[str] = None) -> dict:
+    q: dict = {}
     if since_iso:
         q["created_at"] = {"$gte": since_iso}
+    if group:
+        q["group"] = group
     total = await db.transactions.count_documents(q)
     received = await db.transactions.count_documents({**q, "status": "received"})
     not_received = await db.transactions.count_documents({**q, "status": "not_received"})
@@ -91,6 +94,8 @@ async def status():
         "whatsapp_connected": whatsapp_service.is_connected,
         "whatsapp_qr": whatsapp_service.qr_data_url,
         "whatsapp_error": whatsapp_service.last_error,
+        "whatsapp_groups": whatsapp_service.group_names,
+        "whatsapp_active_group": whatsapp_service.active_group,
         "gpay_logged_in": gpay_service.is_logged_in,
         "gpay_email": gpay_service.email,
     }
@@ -103,6 +108,9 @@ async def get_settings():
         s = Settings()
         await db.settings.insert_one(s.model_dump())
         return s
+    # Backwards-compat migration: single group_name -> group_names
+    if not doc.get("group_names") and doc.get("group_name"):
+        doc["group_names"] = [doc["group_name"]]
     return Settings(**doc)
 
 
@@ -110,6 +118,14 @@ async def get_settings():
 async def update_settings(payload: Settings):
     payload.id = "singleton"
     payload.updated_at = datetime.now(timezone.utc).isoformat()
+    # Sync: if only legacy group_name provided, seed group_names; keep both in DB
+    if not payload.group_names and payload.group_name:
+        payload.group_names = [payload.group_name]
+    # And update legacy field to first entry so old readers still work
+    if payload.group_names and not payload.group_name:
+        payload.group_name = payload.group_names[0]
+    # De-dup and strip
+    payload.group_names = list({g.strip(): None for g in payload.group_names if g and g.strip()}.keys())
     await db.settings.update_one(
         {"id": "singleton"}, {"$set": payload.model_dump()}, upsert=True
     )
@@ -137,16 +153,17 @@ async def gpay_verify(req: VerifyManualRequest):
 @api.post("/whatsapp/start")
 async def wa_start():
     settings = await get_settings()
-    if not settings.group_name:
-        raise HTTPException(400, "Set group_name in settings first")
+    groups = settings.group_names or ([settings.group_name] if settings.group_name else [])
+    if not groups:
+        raise HTTPException(400, "Add at least one WhatsApp group in settings first")
 
-    async def on_image(sender: str, image_bytes: bytes, message_id: str):
+    async def on_image(sender: str, image_bytes: bytes, message_id: str, group: str):
         await process_payment_screenshot(
             db, image_bytes, sender=sender,
-            message_id=message_id, auto_reply=settings.auto_reply,
+            message_id=message_id, auto_reply=settings.auto_reply, group=group,
         )
 
-    return await whatsapp_service.start(settings.group_name, on_image)
+    return await whatsapp_service.start(groups, on_image)
 
 
 @api.post("/whatsapp/stop")
@@ -160,6 +177,7 @@ async def wa_stop():
 async def process_screenshot(
     file: UploadFile = File(...),
     sender: str = Form("manual-upload"),
+    group: Optional[str] = Form(None),
     auto_reply: bool = Form(False),
 ):
     if file.content_type not in ("image/png", "image/jpeg", "image/webp", "image/jpg"):
@@ -168,7 +186,8 @@ async def process_screenshot(
     if len(image_bytes) > 8 * 1024 * 1024:
         raise HTTPException(400, "Image too large (max 8MB)")
     return await process_payment_screenshot(
-        db, image_bytes, sender=sender, message_id=None, auto_reply=auto_reply
+        db, image_bytes, sender=sender, message_id=None,
+        auto_reply=auto_reply, group=group,
     )
 
 
@@ -182,14 +201,30 @@ async def ocr_only(file: UploadFile = File(...)):
 
 # ---- Transactions ----
 @api.get("/transactions")
-async def list_transactions(limit: int = 50, status_filter: Optional[str] = None):
-    q = {"status": status_filter} if status_filter else {}
+async def list_transactions(limit: int = 50, status_filter: Optional[str] = None, group: Optional[str] = None):
+    q: dict = {}
+    if status_filter:
+        q["status"] = status_filter
+    if group:
+        q["group"] = group
     return await db.transactions.find(q, {"_id": 0}).sort("created_at", -1).to_list(limit)
 
 
 @api.get("/transactions/stats")
-async def txn_stats():
-    return await _compute_stats()
+async def txn_stats(group: Optional[str] = None):
+    return await _compute_stats(group=group)
+
+
+@api.get("/transactions/groups")
+async def txn_groups():
+    """List distinct groups seen in transactions, with counts."""
+    pipeline = [
+        {"$match": {"group": {"$ne": None}}},
+        {"$group": {"_id": "$group", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$project": {"_id": 0, "group": "$_id", "count": 1}},
+    ]
+    return await db.transactions.aggregate(pipeline).to_list(50)
 
 
 @api.get("/transactions/{txn_id}")

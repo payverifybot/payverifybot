@@ -27,6 +27,7 @@ async def process_payment_screenshot(
     sender: str = "unknown",
     message_id: Optional[str] = None,
     auto_reply: bool = True,
+    group: Optional[str] = None,
 ) -> dict:
     """Full pipeline: OCR -> duplicate check -> GPay verify -> WhatsApp reply -> persist."""
     txn_id = str(uuid.uuid4())
@@ -103,6 +104,7 @@ async def process_payment_screenshot(
         "id": txn_id,
         "created_at": now,
         "sender": sender,
+        "group": group,
         "message_id": message_id,
         "status": status,
         "utr": utr,
