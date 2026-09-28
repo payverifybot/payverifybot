@@ -52,7 +52,7 @@ function Shell({ children }) {
           </nav>
           <div className="ml-auto flex items-center gap-2 text-xs">
             <StatusPill label="WhatsApp" ok={status?.whatsapp_connected} testid="pill-wa" />
-            <StatusPill label="GPay" ok={status?.gpay_logged_in} testid="pill-gpay" />
+            <StatusPill label={`GPay ×${status?.gpay_active_count || 0}`} ok={status?.gpay_active_count > 0} testid="pill-gpay" />
           </div>
         </div>
       </header>

@@ -78,7 +78,10 @@ async def process_payment_screenshot(
             verify = {"skipped": True, "reason": "duplicate", "duplicate_of": duplicate_of}
         else:
             verify = await gpay_service.verify_utr(utr=utr, amount=amount) or {}
-            ctx = {"utr_last4": utr[-4:], "amount": amount or "?", "utr": utr}
+            ctx = {
+                "utr_last4": utr[-4:], "amount": amount or "?", "utr": utr,
+                "account_label": verify.get("account_label") or "",
+            }
             try:
                 if verify.get("found"):
                     status = "received"

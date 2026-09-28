@@ -84,7 +84,7 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold">Bot status</h2>
           <RowKV k="Mock mode" v={String(!!status?.mock_mode)} testid="row-mock" />
           <RowKV k="WhatsApp"  v={status?.whatsapp_connected ? "connected" : "offline"} testid="row-wa" />
-          <RowKV k="GPay"      v={status?.gpay_logged_in ? (status?.gpay_email || "connected") : "offline"} testid="row-gpay" />
+          <RowKV k="GPay accounts" v={`${status?.gpay_active_count || 0} active / ${status?.gpay_total_count || 0} total`} testid="row-gpay" />
           <div className="border-t border-zinc-800 pt-4 space-y-2">
             <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
               <Mail className="w-4 h-4 text-emerald-400" /> Daily digest

@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { API } from "@/App";
-import { Save, LogIn, Play, Square, Loader2, X, Plus } from "lucide-react";
+import { Save, Play, Square, Loader2, X, Plus } from "lucide-react";
+import GPayAccounts from "./GPayAccounts";
 
 export default function Setup() {
   const [settings, setSettings] = useState(null);
   const [status, setStatus] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [gpayForm, setGpayForm] = useState({ email: "", password: "" });
-  const [gpayMsg, setGpayMsg] = useState(null);
   const [waMsg, setWaMsg] = useState(null);
 
   const loadAll = async () => {
@@ -16,7 +15,6 @@ export default function Setup() {
       fetch(`${API}/status`).then((r) => r.json()),
     ]);
     setSettings(s); setStatus(st);
-    if (s.gpay_email && !gpayForm.email) setGpayForm((f) => ({ ...f, email: s.gpay_email }));
   };
   useEffect(() => { loadAll(); }, []);
 
@@ -26,14 +24,6 @@ export default function Setup() {
     setSaving(true);
     await fetch(`${API}/settings`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(settings) });
     setSaving(false);
-    await loadAll();
-  };
-
-  const gpayLogin = async () => {
-    setGpayMsg("...");
-    const r = await fetch(`${API}/gpay/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(gpayForm) });
-    const data = await r.json();
-    setGpayMsg(data.message || (data.ok ? "Logged in" : "Failed"));
     await loadAll();
   };
 
@@ -99,30 +89,8 @@ export default function Setup() {
         </button>
       </section>
 
-      {/* GPay */}
-      <section className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">GPay Business account</h2>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${status?.gpay_logged_in ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30" : "bg-zinc-800 text-zinc-400 border border-zinc-700"}`}>
-            {status?.gpay_logged_in ? "connected" : "offline"}
-          </span>
-        </div>
-        <Field label="Google email">
-          <input data-testid="input-gpay-email" value={gpayForm.email} onChange={(e) => setGpayForm({ ...gpayForm, email: e.target.value })} className="input" placeholder="you@business.com" />
-        </Field>
-        <Field label="Password">
-          <input data-testid="input-gpay-pass" type="password" value={gpayForm.password} onChange={(e) => setGpayForm({ ...gpayForm, password: e.target.value })} className="input" placeholder="••••••••" />
-        </Field>
-        <button data-testid="btn-gpay-login" onClick={gpayLogin} className="btn-primary">
-          <LogIn className="w-4 h-4" /> Log in to GPay Business
-        </button>
-        {gpayMsg && <p data-testid="gpay-msg" className="text-xs text-zinc-400">{gpayMsg}</p>}
-        {!status?.mock_mode && (
-          <p className="text-xs text-amber-300/80 border-t border-zinc-800 pt-3">
-            Google login often requires 2FA / device confirmation. If the bot reports {"\"requires 2FA\""}, complete it on your phone; the persistent session survives across restarts.
-          </p>
-        )}
-      </section>
+      {/* GPay accounts pool */}
+      <GPayAccounts />
 
       {/* WhatsApp */}
       <section className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-6 space-y-4">

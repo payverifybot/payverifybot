@@ -13,7 +13,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 
 from ocr_service import extract_payment_details
-from gpay_service import gpay_service
+from gpay_service import gpay_service, gpay_pool
 from whatsapp_service import whatsapp_service
 from bot_orchestrator import process_payment_screenshot
 from email_service import send_email, render_digest_html
@@ -44,10 +44,22 @@ class Settings(BaseModel):
     owner_name: str = ""
     digest_enabled: bool = False
     auto_reply: bool = True
-    reply_template_success: str = "✅ Received. UTR ...{utr_last4} ({amount})"
-    reply_template_fail: str = "❌ Not received. UTR ...{utr_last4} not found."
+    reply_template_success: str = "✅ Received via {account_label}. UTR ...{utr_last4} ({amount})"
+    reply_template_fail: str = "❌ Not received. UTR ...{utr_last4} not found in any active GPay account."
     reply_template_duplicate: str = "⚠️ Duplicate UTR ...{utr_last4} — already submitted by {orig_sender} on {orig_time}."
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
+class GPayAccountCreate(BaseModel):
+    label: str
+    email: str
+    password: str
+
+
+class GPayAccountUpdate(BaseModel):
+    label: Optional[str] = None
+    password: Optional[str] = None
+    is_active: Optional[bool] = None
 
 
 class GPayLoginRequest(BaseModel):
@@ -89,6 +101,8 @@ async def root():
 
 @api.get("/status")
 async def status():
+    accounts = await gpay_pool.list_accounts()
+    active_online = [a for a in accounts if a.get("is_active") and a.get("is_logged_in")]
     return {
         "mock_mode": os.environ.get("BOT_MOCK_MODE", "false").lower() == "true",
         "whatsapp_connected": whatsapp_service.is_connected,
@@ -96,8 +110,10 @@ async def status():
         "whatsapp_error": whatsapp_service.last_error,
         "whatsapp_groups": whatsapp_service.group_names,
         "whatsapp_active_group": whatsapp_service.active_group,
-        "gpay_logged_in": gpay_service.is_logged_in,
-        "gpay_email": gpay_service.email,
+        "gpay_logged_in": len(active_online) > 0,
+        "gpay_email": (active_online[0]["email"] if active_online else None),
+        "gpay_active_count": len(active_online),
+        "gpay_total_count": len(accounts),
     }
 
 
@@ -138,6 +154,7 @@ async def update_settings(payload: Settings):
 # ---- GPay ----
 @api.post("/gpay/login")
 async def gpay_login(req: GPayLoginRequest):
+    """Legacy shortcut: upserts a single default account and logs it in."""
     return await gpay_service.login(req.email, req.password)
 
 
@@ -150,6 +167,72 @@ async def gpay_logout():
 @api.post("/gpay/verify")
 async def gpay_verify(req: VerifyManualRequest):
     return await gpay_service.verify_utr(req.utr, req.amount)
+
+
+# ---- GPay Account Pool ----
+@api.get("/gpay/accounts")
+async def list_gpay_accounts():
+    return await gpay_pool.list_accounts()
+
+
+@api.post("/gpay/accounts")
+async def add_gpay_account(payload: GPayAccountCreate):
+    return await gpay_pool.add_account(payload.label, payload.email, payload.password)
+
+
+@api.patch("/gpay/accounts/{account_id}")
+async def update_gpay_account(account_id: str, payload: GPayAccountUpdate):
+    updates: dict = {}
+    if payload.label is not None:
+        updates["label"] = payload.label
+    if updates:
+        await db.gpay_accounts.update_one({"id": account_id}, {"$set": updates})
+    if payload.is_active is not None:
+        try:
+            await gpay_pool.set_active(account_id, payload.is_active)
+        except KeyError:
+            raise HTTPException(404, "Account not found")
+    if payload.password:
+        try:
+            await gpay_pool.re_login(account_id, password=payload.password)
+        except KeyError:
+            raise HTTPException(404, "Account not found")
+    fresh = await db.gpay_accounts.find_one({"id": account_id}, {"_id": 0, "password_enc": 0})
+    if not fresh:
+        raise HTTPException(404, "Account not found")
+    return fresh
+
+
+@api.delete("/gpay/accounts/{account_id}")
+async def delete_gpay_account(account_id: str):
+    return await gpay_pool.delete_account(account_id)
+
+
+@api.post("/gpay/accounts/{account_id}/hit-limit")
+async def gpay_hit_limit(account_id: str):
+    """One-click: mark this account as limit-reached (deactivates it)."""
+    try:
+        await gpay_pool.set_active(account_id, False)
+    except KeyError:
+        raise HTTPException(404, "Account not found")
+    return {"ok": True}
+
+
+@api.post("/gpay/accounts/{account_id}/reactivate")
+async def gpay_reactivate(account_id: str):
+    try:
+        await gpay_pool.set_active(account_id, True)
+    except KeyError:
+        raise HTTPException(404, "Account not found")
+    return {"ok": True}
+
+
+@api.post("/gpay/accounts/{account_id}/re-login")
+async def gpay_relogin(account_id: str, password: Optional[str] = Form(None)):
+    try:
+        return await gpay_pool.re_login(account_id, password=password)
+    except KeyError:
+        raise HTTPException(404, "Account not found")
 
 
 # ---- WhatsApp ----
@@ -323,8 +406,14 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+async def startup():
+    gpay_pool.bind_db(db)
+    asyncio.create_task(gpay_pool.restore_from_db())
+
+
 @app.on_event("shutdown")
 async def shutdown():
     client.close()
-    await gpay_service.close()
+    await gpay_pool.close_all()
     await whatsapp_service.stop()
