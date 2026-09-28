@@ -17,7 +17,7 @@ export default function Dashboard() {
         fetch(`${API}/status`).then((r) => r.json()),
       ]);
       setStats(s); setRecent(r); setStatus(st);
-    } catch (e) { console.error(e); }
+    } catch { /* transient — silent, next poll retries */ }
   };
 
   const sendDigestNow = async () => {
@@ -37,6 +37,7 @@ export default function Dashboard() {
     load();
     const t = setInterval(load, 6000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (

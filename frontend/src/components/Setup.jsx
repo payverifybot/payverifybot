@@ -16,7 +16,7 @@ export default function Setup() {
     ]);
     setSettings(s); setStatus(st);
   };
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   if (!settings) return <p className="text-zinc-500">Loading…</p>;
 

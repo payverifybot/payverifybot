@@ -18,6 +18,7 @@ export default function GPayAccounts() {
     load();
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const addAccount = async () => {
