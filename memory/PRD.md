@@ -1,67 +1,70 @@
 # PayVerify Bot — PRD
 
 ## Original problem statement
-User runs an online business. Customers pay via GPay Business and send the payment screenshot + last-4 digits of the UTR to a WhatsApp group. Today the owner manually opens GPay Business dashboard, checks the transaction, and replies "received / not received" in the group. Goal: automate this loop.
+User runs an online business. Customers pay via GPay Business and send payment screenshots + UTR last 4 to a WhatsApp group. Today the owner manually opens GPay Business dashboard, checks the transaction, and replies "received / not received" in the group. Goal: automate this loop.
 
-## User choices (from ask_human)
-- **WhatsApp**: WhatsApp Web automation via personal number (unofficial, QR-scan based)
-- **GPay verification**: GPay Business dashboard login + scrape via browser automation
-- **Customer input**: Payment screenshot only — bot must OCR the UTR out of it
-- **Deployment**: FastAPI + React admin panel
-- **Scope**: Full pipeline — WhatsApp automation + GPay automation + admin dashboard, with reply-to-message (received/not received)
+## User choices
+- WhatsApp Web automation via personal number (QR-scan based)
+- GPay Business dashboard login + Playwright scraping
+- Customer input: screenshot only (bot OCRs UTR out of it)
+- FastAPI + React admin panel
+- Full pipeline + admin dashboard + auto-reply
 
 ## Architecture
 ```
-[WhatsApp group image] → whatsapp_service (Playwright)
+[WhatsApp group image] → whatsapp_service (Playwright, real DOM watcher)
         ↓
-[image bytes]  → ocr_service (Gemini vision, gemini-3-flash-preview) → { utr, amount, payer, ... }
+[image bytes]  → ocr_service (Gemini vision) → { utr, amount, payer, ... }
         ↓
-[utr, amount]  → gpay_service (Playwright on business.google.com/payments) → { found: bool, ... }
+[utr]          → duplicate check (Mongo)
+                   ├── duplicate → mark & reply immediately (skip GPay)
+                   └── new       → gpay_service (Playwright) → { found: bool }
         ↓
-bot_orchestrator → MongoDB `transactions` collection + reply via whatsapp_service
+bot_orchestrator → Mongo `transactions` → whatsapp_service.send_reply
+        ↓
+Daily 21:00 IST cron → email_service (Resend, managed) → owner_email
 ```
 
-- Backend: FastAPI, Motor (MongoDB), emergentintegrations (Gemini via EMERGENT_LLM_KEY), Playwright
-- Frontend: React + Tailwind, dark theme, emerald/rose/amber semantic accents
-- **Preview mode**: `BOT_MOCK_MODE=true` in `/app/backend/.env` — GPay & WhatsApp are simulated (even last-digit UTR → received, odd → not received). OCR uses **real** Gemini.
+- Backend: FastAPI, Motor, emergentintegrations, Playwright, httpx
+- Frontend: React + Tailwind (dark, emerald/rose/amber/violet semantic accents), responsive
+- Scheduling: `.emergent/crons.yml` (`daily-digest` at `0 21 * * *` IST)
+- Mock switch: `BOT_MOCK_MODE=true` in `/app/backend/.env` (default in preview). OCR + email are always real.
 
 ## Personas
-- **Business owner** (primary): configures WA group, links GPay, monitors the dashboard, occasionally overrides a decision.
+- Business owner (primary): configures group + email, monitors dashboard, occasionally overrides a decision.
 
 ## Core requirements
 1. Read payment screenshots posted in a specific WhatsApp group
-2. Extract the UTR from the screenshot
+2. Extract UTR from screenshot
 3. Verify UTR against GPay Business dashboard
-4. Auto-reply in the group with success/failure message
-5. Provide an admin dashboard with counts, transaction log, manual override, and setup
+4. Auto-reply in the group with success/failure
+5. Admin dashboard with counts, log, manual override, setup
 
-## What's been implemented (2026-01-15)
-- Full FastAPI backend (`/api/status`, `/api/settings`, `/api/gpay/login`, `/api/gpay/verify`, `/api/whatsapp/start`, `/api/whatsapp/stop`, `/api/process-screenshot`, `/api/ocr`, `/api/transactions*`)
-- Real Gemini vision OCR that reliably extracts UTR, amount, payer name from receipt images
-- Mock-mode GPay & WhatsApp services with the exact same API surface as the real Playwright ones (drop-in when `BOT_MOCK_MODE=false`)
-- Bot orchestrator that respects user-configured reply templates (`{utr_last4}`, `{amount}` placeholders)
-- React admin dashboard with 4 pages:
-  - **Overview** — stat cards, recent verifications, live bot status
-  - **Transactions** — filterable log + detail panel + manual override
-  - **Test Upload** — upload a screenshot and see the full pipeline result
-  - **Setup** — WA group name, reply templates, auto-reply toggle, GPay login, WA session
-- MongoDB persistence with proper (`_id` excluded, ISO datetime) serialization
-- Test coverage: backend 100% (17 checks), frontend 100% after fix
+## What's been implemented
+### 2026-01-15 — MVP (iteration 1)
+- Full FastAPI backend, real Gemini OCR, mock GPay & WhatsApp services with matching API surface
+- React admin dashboard: Overview, Transactions, Test Upload, Setup
+- Configurable reply templates with `{utr_last4}`, `{amount}` placeholders
+- Testing agent: backend 100%, frontend 100% after one URL fix
 
-## Deviations from ideal / known limits
-- GPay Business dashboard automation is **fragile** because Google actively fights browser automation. For production, the user must run the bot process on a real machine where they can complete 2FA once. The container serves the admin dashboard.
-- WhatsApp Web session lasts ~14 days per QR scan.
-- The `_monitor_loop` in `whatsapp_service.py` that reads new group images is currently a stub — needs DOM scraping logic for `web.whatsapp.com` to be production-ready.
+### 2026-01-15 — Iteration 2 (all four next actions)
+- **Live WhatsApp Watcher**: Real Playwright DOM watcher (`whatsapp_service._monitor_loop`) that opens the target group, primes `seen_ids`, polls every 3s for new image bubbles, canvas-exports each blob to JPEG, and calls `on_image(sender, bytes, msg_id)`. `send_reply` opens the message context menu, clicks Reply, types & sends. All still respects `BOT_MOCK_MODE`.
+- **Local Runner Kit**: `/app/local-runner/` with `Dockerfile.backend` (Playwright base image), `docker-compose.yml` (mongo + backend + frontend), `.env.example`, `start.sh` one-click, and a full `README.md` covering QR setup, GPay 2FA, persistent profiles, and troubleshooting.
+- **Duplicate UTR Guard**: `bot_orchestrator._find_duplicate()` checks Mongo before GPay. Duplicates get their own `status="duplicate"`, `duplicate_of` field, a dedicated `reply_template_duplicate` with `{utr_last4}`, `{orig_sender}`, `{orig_time}` placeholders, a violet stat card + row badge + filter chip on the frontend, and GPay is not touched.
+- **Daily Payment Digest**: Emergent-managed Resend integration via `email_service.py` (guardrail-gated, no user-supplied HTML). Settings gain `owner_email`, `owner_name`, `digest_enabled`. `.emergent/crons.yml` calls `/api/cron/digest` at 21:00 IST with HMAC bearer auth + `X-Webhook-Id` idempotency. Cron acks 2xx immediately and kicks a background task. Dashboard has a "Send digest now" button; `/api/digest/history` records each send.
+- Responsive header (mobile viewport 390px: nav collapses to icons, no horizontal overflow).
+- Testing agent iter 2: backend 100%, frontend 100%, plus review-nit fixes applied (top-level asyncio import; duplicate lookup narrowed to root submissions).
 
-## Backlog (prioritized)
+## Backlog
 ### P0
-- Replace WhatsApp `_monitor_loop` stub with real DOM watcher for new image messages in target group
-- Ship a `docker-compose.yml` + README so user can run the bot service locally against the hosted dashboard
+- Multi-group support (pick which groups to watch)
+- SMS-based fallback verification for GPay (much more reliable than dashboard scraping)
 ### P1
 - Encrypted at-rest storage of GPay credentials (currently in-memory only)
-- Retry queue: if GPay dashboard errors, re-verify after N minutes rather than immediately marking not_received
-- Fraud check: flag if the same UTR is submitted twice by different senders
+- Retry queue: if GPay verify errors, requeue after N min instead of instantly marking not_received
+- Optional WhatsApp digest (send the summary as a WA message to a chosen chat)
 ### P2
-- SMS fallback verification (Android companion) — much more reliable than GPay scraping
-- Multi-group support
-- Daily digest email of totals
+- Fraud rules: block a UTR whose amount doesn't match a pending order
+- Order-matching: attach each verified payment to an order id from a linked shop
+- CSV export & GSheet sync
+- Multi-currency

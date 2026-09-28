@@ -15,7 +15,7 @@ async def _find_duplicate(db, utr: str) -> Optional[dict]:
     if not utr:
         return None
     return await db.transactions.find_one(
-        {"utr": utr, "status": {"$in": ["received", "not_received", "duplicate"]}},
+        {"utr": utr, "status": {"$in": ["received", "not_received"]}},
         {"_id": 0},
         sort=[("created_at", 1)],
     )

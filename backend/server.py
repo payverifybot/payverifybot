@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, UploadFile, File, Form, HTTPException, R
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
 import os
 import hmac
 import logging
@@ -265,7 +266,6 @@ async def cron_digest(request: Request):
         "received_at": datetime.now(timezone.utc).isoformat(),
     })
     # Background the actual send so we ack 2xx fast
-    import asyncio
     asyncio.create_task(_send_daily_digest())
     return {"ok": True, "run_id": run_id}
 
