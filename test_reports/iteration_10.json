@@ -1,0 +1,28 @@
+{
+  "summary": "Iteration 10 (runtime MOCK/LIVE toggle) fully verified. Backend: 10/10 pytest cases pass — including regression smoke (root, settings, transactions, gpay/accounts), new GET/POST /api/mode, /api/status.mock_mode + /api/diagnostics.system.mock_mode both reflect runtime toggle, and POST /api/gpay/accounts respects runtime flag (returns login.mock=true while mock_mode=true). Frontend: data-testid=mode-toggle pill shows 'Mock' initially, clicking Mock->Live triggers window.confirm (auto-accepted via dialog handler) and pill turns 'Live'; Setup page shows data-testid=live-banner with the 4-step ordered list; clicking Live->Mock does NOT trigger confirm and pill returns to 'Mock'; Setup shows data-testid=mock-banner again. Final runtime state left at mock_mode=true as required.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Setup page banner reactivity", "issue": "Setup.jsx only calls loadAll() once on mount, so if a user toggles mode from the header while already on Setup, the live-banner/mock-banner does NOT update until the user navigates away and back (or a settings save triggers loadAll). Minor UX — consider polling status or lifting status to context. Header pill itself updates fine (polls every 5s).", "affected_selectors": ["[data-testid=\"live-banner\"]", "[data-testid=\"mock-banner\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration_10.py", "/app/test_reports/pytest/iter10.xml"],
+  "action_items": [
+    "(Optional/minor) Make Setup.jsx poll status or subscribe to a shared status context so the mock/live banner updates in-place when the header toggle is clicked without needing a nav round-trip."
+  ],
+  "critical_code_review_comments": [
+    "runtime_state is an in-process module-level dict — will drift if backend is scaled to >1 worker/replica. Fine for single-process preview; document this or persist to Mongo if scaling is on the roadmap.",
+    "POST /api/mode has no auth — anyone with the public URL can flip to live mode. Acceptable for MVP preview but should be gated (e.g., WEBHOOK_CRON_SECRET style bearer) before production.",
+    "Setup.jsx status is fetched only on mount; banner state can go stale relative to header (see integration_issues)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_10.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "n/a",
+  "seed_data_creation": "Test GPay account TEST_iter10 was created and deleted within test_gpay_add_respects_mock_toggle. No residual test data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Runtime state left at mock_mode=true. Backend test file /app/backend/tests/test_iteration_10.py contains full regression + mode toggle coverage. Note the Setup banner-doesn't-refresh-in-place quirk if verifying future iterations.",
+  "rca of the issue": "n/a — no blocking bugs. Only minor UX note about Setup banner reactivity."
+}

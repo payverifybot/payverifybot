@@ -16,7 +16,18 @@ export default function Setup() {
     ]);
     setSettings(s); setStatus(st);
   };
-  useEffect(() => { loadAll(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => {
+    loadAll();
+    const t = setInterval(async () => {
+      // Just re-poll status so mock/live banner stays in sync with header toggle.
+      try {
+        const st = await fetch(`${API}/status`).then((r) => r.json());
+        setStatus(st);
+      } catch { /* silent */ }
+    }, 4000);
+    return () => clearInterval(t);
+    /* eslint-disable-next-line react-hooks/exhaustive-deps */
+  }, []);
 
   if (!settings) return <p className="text-zinc-500">Loading…</p>;
 
