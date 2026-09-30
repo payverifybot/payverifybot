@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 7 regression smoke pass. Verified asyncio.wait_for(45s) wrapper in gpay_service.login() is syntactically valid and backend serves normally in MOCK mode. All 7 backend pytest cases pass; all 4 frontend routes load with 0 JS console errors; /setup shows gpay-accounts panel with gpay-count='1 active / 3 total'. Timeout code path itself (real login) cannot be exercised in preview because BOT_MOCK_MODE=true short-circuits before wait_for; verified by code review of gpay_service.py lines 66-78.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "smoke_results": {
+    "GET /api/status": "200 - mock_mode=true, gpay_active_count/gpay_total_count/whatsapp_groups present",
+    "GET /api/gpay/accounts": "200 - no password_enc leak",
+    "POST /api/gpay/accounts (mock)": "200 - account.id + is_logged_in=true + login.ok=true + login.mock=true; no password_enc",
+    "PATCH /api/gpay/accounts/{id} {password:'newpw'}": "200 - triggers mock re-login; is_logged_in remains true",
+    "POST /api/process-screenshot (even-UTR PNG)": "200 - status='received', account_label populated (nested in gpay_result)",
+    "GET /api/transactions/stats": "200 - 5 counters present (total, received, not_received, utr_not_found, duplicate)",
+    "DELETE /api/gpay/accounts/{id}": "200 ok=true; account removed",
+    "Frontend / /transactions /test /setup": "All 4 routes load; [data-testid=gpay-accounts] present; [data-testid=gpay-count]='1 active / 3 total'; 0 console errors"
+  },
+  "code_review_of_wait_for_wrapper": "gpay_service.py:66-78 correctly wraps _do_real_login in asyncio.wait_for(timeout=45.0), catches asyncio.TimeoutError, calls await self.close() to clean up Playwright resources, and returns {ok: False, timeout: True, message: ...}. Mock branch (lines 67-71) returns before wait_for so preview behavior is unaffected. Docker-compose default flip BOT_MOCK_MODE:-true is a safe user-experience fix.",
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_7.py",
+    "/app/test_reports/pytest/iteration_7.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Timeout path could not be exercised in preview (MOCK_MODE=true skips real login). Recommend main agent add a unit test that patches _do_real_login with an async sleep >45s to validate the timeout branch, if desired.",
+    "gpay_service.py is 366 lines — approaching the 700-line threshold but still fine. Consider splitting _AccountSession into its own module later."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_7.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7)", "frontend": "100% (4/4 routes)"},
+  "seed_data_creation": "One TEST_iter7 GPay account was created and deleted within test lifecycle; no residue.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Preview always runs BOT_MOCK_MODE=true. The docker-compose change only impacts user's local Windows env. Real-login timeout branch of gpay_service.login() is only reachable when MOCK_MODE=false; cannot be validated in preview without env override. Existing test suites: test_iteration_2..7 in /app/backend/tests/."
+}
