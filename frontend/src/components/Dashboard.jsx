@@ -142,13 +142,15 @@ export default function Dashboard() {
             </button>
             {diag?.checks && (
               <>
-                <ul data-testid="diag-list" className="space-y-1 mt-2 text-[11px]">
+                <ul data-testid="diag-list" className="space-y-2 mt-2 text-[11px]">
                   {diag.checks.map((c) => (
-                    <li key={c.name} className="flex items-start gap-2">
-                      {c.ok ? <CheckCircle2 className="w-3 h-3 text-emerald-400 mt-0.5 shrink-0" /> : <XCircle className="w-3 h-3 text-rose-400 mt-0.5 shrink-0" />}
-                      <div className="flex-1 min-w-0">
-                        <div className="text-zinc-300">{c.name}</div>
-                        <div className="text-zinc-500 truncate" title={c.detail}>{c.detail}</div>
+                    <li key={c.name} className={`rounded-md border p-2 ${c.ok ? "border-zinc-800 bg-zinc-900/40" : "border-rose-500/30 bg-rose-500/5"}`}>
+                      <div className="flex items-start gap-2">
+                        {c.ok ? <CheckCircle2 className="w-3 h-3 text-emerald-400 mt-0.5 shrink-0" /> : <XCircle className="w-3 h-3 text-rose-400 mt-0.5 shrink-0" />}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-zinc-200 font-medium">{c.name}</div>
+                          <pre data-testid={`diag-detail-${c.name}`} className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-zinc-400 max-h-40 overflow-auto">{c.detail}</pre>
+                        </div>
                       </div>
                     </li>
                   ))}

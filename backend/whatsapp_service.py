@@ -1,42 +1,47 @@
-"""WhatsApp Web automation via Playwright.
+"""WhatsApp Web automation via Playwright — with rich live status.
 
-Real DOM watcher for a target group:
-  - persistent chromium profile (survives QR scan across restarts)
-  - opens web.whatsapp.com, locates the group by name
-  - polls the message pane for NEW image messages (unseen ids)
-  - downloads each image via a canvas.toBlob trick (survives WA's blob URLs)
-  - calls on_image(sender, image_bytes, message_id) for each new one
-  - send_reply() clicks reply-to on a message and posts text
+Public state (surfaced by /api/whatsapp/status):
+    step           one of: idle | launching | awaiting_qr | scanning | linking |
+                            connected | error | stopped
+    qr_data_url    data-URL of the CURRENT QR PNG (auto-refreshed every ~5s while
+                   awaiting_qr). WhatsApp rotates its own QR every ~60s; we just
+                   re-screenshot the on-page canvas so the UI always shows a
+                   live, scannable code.
+    screenshot_b64 latest full-page screenshot (base64 PNG) — updated on every
+                   state change and every QR refresh, so the operator sees
+                   exactly what the bot's browser sees.
+    last_error     human-readable message on failure.
+    prompt         short instruction to the operator when human action is
+                   required (e.g. "Scan this QR from your phone").
 
-Set BOT_MOCK_MODE=true to simulate (no browser).
+Set the runtime mock flag (via /api/mode) to bypass Playwright entirely.
 """
 import os
-import re
 import base64
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, Callable, Awaitable
+from typing import Optional
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger(__name__)
 
-MOCK_MODE_LEGACY = os.environ.get("BOT_MOCK_MODE", "false").lower() == "true"  # legacy fallback only
 import runtime_state as _rt
 
 def _is_mock() -> bool:
     return _rt.is_mock_mode()
+
+def _headless() -> bool:
+    return os.environ.get("PLAYWRIGHT_HEADLESS", "true").lower() != "false"
+
 WA_URL = "https://web.whatsapp.com/"
 USER_DATA_DIR = Path(os.environ.get("WA_PROFILE_DIR", "/tmp/whatsapp_profile"))
 POLL_INTERVAL = float(os.environ.get("WA_POLL_INTERVAL", "3"))
+QR_REFRESH_SECS = float(os.environ.get("WA_QR_REFRESH_SECS", "5"))
 
 
-# JS run in-page to enumerate image messages currently rendered in the open chat.
-# Returns a list of { id, sender, dataUrl }. WA's messages have a
-# data-id attribute like "true_120363@g.us_ABCDEF..." and image bubbles contain
-# a rendered <img> whose src is a blob: URL. We paint the <img> onto a canvas
-# and export as a data URL so Python can pull the bytes back with one call.
 _JS_EXTRACT_IMAGES = r"""
 async () => {
   const rows = document.querySelectorAll('div[role="row"], div._amjy, div.message-in, div.message-out');
@@ -47,7 +52,6 @@ async () => {
     if (!id) continue;
     const img = row.querySelector('img[src^="blob:"]');
     if (!img) continue;
-    // sender: for group chats, WA renders a colored span above the bubble
     const senderEl = row.querySelector('span._ao3e, [aria-label]');
     const sender = senderEl ? (senderEl.getAttribute('aria-label') || senderEl.textContent || '').trim() : '';
     try {
@@ -64,7 +68,6 @@ async () => {
 
 _JS_OPEN_GROUP = r"""
 async (name) => {
-  // click the search box
   const searchBtn = document.querySelector('button[aria-label="Search or start new chat"], div[aria-label="Search input textbox"]');
   if (searchBtn) searchBtn.click();
   await new Promise(r => setTimeout(r, 300));
@@ -83,6 +86,10 @@ async (name) => {
 """
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 class WhatsAppService:
     def __init__(self):
         self._playwright = None
@@ -92,11 +99,17 @@ class WhatsAppService:
         self._qr_data_url: Optional[str] = None
         self._group_names: list[str] = []
         self._monitor_task: Optional[asyncio.Task] = None
+        self._boot_task: Optional[asyncio.Task] = None
         self._on_image_callback = None
         self._seen_by_group: dict[str, set[str]] = {}
         self._last_error: Optional[str] = None
         self._active_group: Optional[str] = None
+        self._step: str = "idle"
+        self._prompt: Optional[str] = None
+        self._screenshot_b64: Optional[str] = None
+        self._updated_at: str = _now()
 
+    # ---------- public getters ----------
     @property
     def is_connected(self) -> bool:
         return self._connected
@@ -117,65 +130,153 @@ class WhatsAppService:
     def group_names(self) -> list[str]:
         return list(self._group_names)
 
+    def status(self) -> dict:
+        return {
+            "step": self._step,
+            "connected": self._connected,
+            "qr_data_url": self._qr_data_url,
+            "screenshot_b64": self._screenshot_b64,
+            "prompt": self._prompt,
+            "last_error": self._last_error,
+            "groups": list(self._group_names),
+            "active_group": self._active_group,
+            "updated_at": self._updated_at,
+            "headless": _headless(),
+            "mock": _is_mock(),
+        }
+
+    # ---------- helpers ----------
+    def _set(self, *, step: Optional[str] = None, prompt: Optional[str] = None,
+             error: Optional[str] = None, qr: Optional[str] = None):
+        if step is not None:
+            self._step = step
+        if prompt is not None:
+            self._prompt = prompt or None
+        if error is not None:
+            self._last_error = error or None
+        if qr is not None:
+            self._qr_data_url = qr or None
+        self._updated_at = _now()
+        logger.info("[WA] step=%s prompt=%r error=%r", self._step, self._prompt, self._last_error)
+
+    async def _snap(self):
+        """Take a full-page screenshot and store it (best effort)."""
+        if not self._page:
+            return
+        try:
+            png = await self._page.screenshot(type="png", full_page=False)
+            self._screenshot_b64 = base64.b64encode(png).decode()
+            self._updated_at = _now()
+        except Exception:
+            pass
+
+    # ---------- lifecycle ----------
     async def start(self, group_names, on_image):
-        # Accept either a single string (backwards compat) or a list
+        # Cancel any prior boot task
+        if self._boot_task and not self._boot_task.done():
+            self._boot_task.cancel()
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+
         if isinstance(group_names, str):
             group_names = [g.strip() for g in group_names.split(",") if g.strip()]
         self._group_names = [g for g in (group_names or []) if g]
         self._on_image_callback = on_image
-        self._last_error = None
         self._seen_by_group = {g: set() for g in self._group_names}
+        self._last_error = None
+        self._prompt = None
+        self._screenshot_b64 = None
 
         if _is_mock():
             self._connected = True
             self._qr_data_url = None
+            self._set(step="connected", prompt=None, error=None)
             logger.info("WhatsApp (mock) started for groups %s", self._group_names)
-            return {"ok": True, "mock": True, "groups": self._group_names}
+            return {"ok": True, "mock": True, "groups": self._group_names, "step": "connected"}
 
+        # Kick off boot in the background — return immediately so the UI can poll status.
+        self._set(step="launching", prompt="Starting Chromium and opening WhatsApp Web…", error=None)
+        self._boot_task = asyncio.create_task(self._boot())
+        return {
+            "ok": True,
+            "groups": self._group_names,
+            "step": self._step,
+            "message": "WhatsApp is starting. Watch the live status panel — a QR will appear when it's ready.",
+        }
+
+    async def _boot(self):
+        """Launch Playwright, open WA, keep refreshing the QR until linked or aborted."""
         try:
             from playwright.async_api import async_playwright
             self._playwright = await async_playwright().start()
             USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
             self._browser = await self._playwright.chromium.launch_persistent_context(
                 str(USER_DATA_DIR),
-                headless=True,
+                headless=_headless(),
                 args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
             )
             self._page = self._browser.pages[0] if self._browser.pages else await self._browser.new_page()
+            self._set(step="launching", prompt="Loading web.whatsapp.com…")
             await self._page.goto(WA_URL, wait_until="domcontentloaded", timeout=60000)
+            await self._snap()
 
-            try:
-                await self._page.wait_for_selector(
-                    'canvas[aria-label*="Scan"], [data-testid="chat-list"], [aria-label="Chat list"]',
-                    timeout=120000,
+            # QR + linking loop (up to 5 minutes)
+            deadline = asyncio.get_event_loop().time() + 300
+            linked = False
+            while asyncio.get_event_loop().time() < deadline:
+                # Are we linked yet?
+                chatlist = await self._page.query_selector(
+                    '[data-testid="chat-list"], [aria-label="Chat list"], div#pane-side'
                 )
+                if chatlist:
+                    linked = True
+                    break
+
+                # Is a QR present?
+                qr_canvas = await self._page.query_selector('canvas[aria-label*="Scan"], canvas[aria-label*="scan"]')
+                if qr_canvas:
+                    try:
+                        png = await qr_canvas.screenshot(type="png")
+                        self._qr_data_url = "data:image/png;base64," + base64.b64encode(png).decode()
+                        self._set(step="awaiting_qr",
+                                  prompt="Open WhatsApp on your phone → Settings → Linked devices → Link a device → scan this QR.")
+                        await self._snap()
+                    except Exception:
+                        pass
+                else:
+                    # Might be showing "loading" or "click to reload" — capture a snap for the user.
+                    if self._step == "launching":
+                        self._set(prompt="Waiting for the WhatsApp login screen…")
+                    await self._snap()
+
+                await asyncio.sleep(QR_REFRESH_SECS)
+
+            if not linked:
+                self._connected = False
+                self._set(step="error", error="QR was not scanned in 5 minutes. Click Start again to try once more.",
+                          prompt=None, qr="")
+                await self._snap()
+                return
+
+            # We're linked.
+            self._qr_data_url = None
+            self._connected = True
+            self._set(step="connected", prompt=None, error=None, qr="")
+            await self._snap()
+            self._monitor_task = asyncio.create_task(self._monitor_loop())
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            logger.exception("WA boot failed")
+            self._set(step="error", error=f"{type(e).__name__}: {e}", prompt=None)
+            try:
+                await self._snap()
             except Exception:
                 pass
-
-            qr = await self._page.query_selector('canvas[aria-label*="Scan"]')
-            if qr:
-                png = await qr.screenshot(type="png")
-                self._qr_data_url = "data:image/png;base64," + base64.b64encode(png).decode()
-                try:
-                    await self._page.wait_for_selector('[data-testid="chat-list"], [aria-label="Chat list"]', timeout=180000)
-                    self._qr_data_url = None
-                except Exception:
-                    self._last_error = "QR not scanned in time"
-                    self._connected = False
-                    return {"ok": False, "error": self._last_error}
-
-            self._connected = True
-            self._monitor_task = asyncio.create_task(self._monitor_loop())
-            return {"ok": True, "groups": self._group_names}
-        except Exception as e:
-            logger.exception("WhatsApp start failed")
-            self._last_error = str(e)
-            return {"ok": False, "error": str(e)}
+            await self._cleanup()
 
     async def _monitor_loop(self):
-        """Rotate through configured groups. On first visit to a group we PRIME
-        seen_ids (so history isn't reprocessed); on subsequent visits we emit
-        only images with a new data-id."""
+        """Rotate through configured groups, poll for new image messages."""
         idx = 0
         while True:
             try:
@@ -185,8 +286,8 @@ class WhatsAppService:
                 group = self._group_names[idx % len(self._group_names)]
                 idx += 1
                 self._active_group = group
+                self._updated_at = _now()
 
-                # Switch to this chat
                 open_res = await self._page.evaluate(_JS_OPEN_GROUP, group)
                 if not open_res.get("ok"):
                     logger.warning("Could not open group %s: %s", group, open_res.get("reason"))
@@ -197,7 +298,6 @@ class WhatsAppService:
                 seen = self._seen_by_group.setdefault(group, set())
                 first_visit = not seen
                 if first_visit:
-                    # Prime — don't re-process history
                     seen.update(m["id"] for m in messages if m.get("id"))
                     continue
 
@@ -233,7 +333,6 @@ class WhatsAppService:
         if not self._page:
             return False
         try:
-            # Find the message row, hover, click the menu, click Reply, type, send
             js = r"""
             async ([msgId, text]) => {
               const row = document.querySelector(`[data-id="${msgId}"]`)?.closest('div[role="row"], div._amjy');
@@ -270,9 +369,7 @@ class WhatsAppService:
             logger.exception("send_reply failed")
             return False
 
-    async def stop(self):
-        if self._monitor_task:
-            self._monitor_task.cancel()
+    async def _cleanup(self):
         try:
             if self._browser:
                 await self._browser.close()
@@ -280,10 +377,19 @@ class WhatsAppService:
                 await self._playwright.stop()
         except Exception:
             pass
-        self._connected = False
         self._page = None
         self._browser = None
+        self._playwright = None
+
+    async def stop(self):
+        if self._monitor_task:
+            self._monitor_task.cancel()
+        if self._boot_task:
+            self._boot_task.cancel()
+        await self._cleanup()
+        self._connected = False
         self._qr_data_url = None
+        self._set(step="stopped", prompt=None, error=None, qr="")
 
 
 whatsapp_service = WhatsAppService()

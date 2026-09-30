@@ -276,6 +276,21 @@ async def wa_stop():
     return {"ok": True}
 
 
+@api.get("/whatsapp/status")
+async def wa_status():
+    """Rich live status of the WA session — step, QR, screenshot, error."""
+    return whatsapp_service.status()
+
+
+@api.get("/gpay/accounts/{account_id}/status")
+async def gpay_account_status(account_id: str):
+    """Rich live status of one GPay Business account — step, screenshot, error."""
+    try:
+        return await gpay_pool.get_status(account_id)
+    except KeyError:
+        raise HTTPException(404, "Account not found")
+
+
 # ---- Screenshot processing ----
 @api.post("/process-screenshot")
 async def process_screenshot(
@@ -484,7 +499,11 @@ async def diagnostics():
         return True, f"{len(accounts)} total, {len(active)} active, {len(online)} online"
 
     async def _whatsapp():
-        return True, f"connected={whatsapp_service.is_connected}, groups={whatsapp_service.group_names}, error={whatsapp_service.last_error}"
+        st = whatsapp_service.status()
+        detail = f"step={st['step']}, connected={st['connected']}, groups={st['groups']}"
+        if st.get("last_error"):
+            detail += f", error={st['last_error']}"
+        return True, detail
 
     async def _email():
         if not os.environ.get("EMERGENT_EMAIL_KEY"):

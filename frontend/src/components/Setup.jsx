@@ -1,30 +1,34 @@
 import { useEffect, useState } from "react";
 import { API } from "@/App";
-import { Save, Play, Square, Loader2, X, Plus } from "lucide-react";
+import { Save, Play, Square, Loader2, X, Plus, RefreshCcw } from "lucide-react";
 import GPayAccounts from "./GPayAccounts";
 
 export default function Setup() {
   const [settings, setSettings] = useState(null);
   const [status, setStatus] = useState(null);
+  const [waStatus, setWaStatus] = useState(null);
   const [saving, setSaving] = useState(false);
   const [waMsg, setWaMsg] = useState(null);
 
   const loadAll = async () => {
-    const [s, st] = await Promise.all([
+    const [s, st, wa] = await Promise.all([
       fetch(`${API}/settings`).then((r) => r.json()),
       fetch(`${API}/status`).then((r) => r.json()),
+      fetch(`${API}/whatsapp/status`).then((r) => r.json()).catch(() => null),
     ]);
-    setSettings(s); setStatus(st);
+    setSettings(s); setStatus(st); setWaStatus(wa);
   };
   useEffect(() => {
     loadAll();
     const t = setInterval(async () => {
-      // Just re-poll status so mock/live banner stays in sync with header toggle.
       try {
-        const st = await fetch(`${API}/status`).then((r) => r.json());
-        setStatus(st);
+        const [st, wa] = await Promise.all([
+          fetch(`${API}/status`).then((r) => r.json()),
+          fetch(`${API}/whatsapp/status`).then((r) => r.json()).catch(() => null),
+        ]);
+        setStatus(st); setWaStatus(wa);
       } catch { /* silent */ }
-    }, 4000);
+    }, 3000);
     return () => clearInterval(t);
     /* eslint-disable-next-line react-hooks/exhaustive-deps */
   }, []);
@@ -39,10 +43,18 @@ export default function Setup() {
   };
 
   const waStart = async () => {
-    setWaMsg("Starting...");
-    const r = await fetch(`${API}/whatsapp/start`, { method: "POST" });
-    const d = await r.json();
-    setWaMsg(d.ok ? "WhatsApp session started" : d.error || "Failed");
+    setWaMsg("Starting…");
+    try {
+      const r = await fetch(`${API}/whatsapp/start`, { method: "POST" });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setWaMsg(d.detail || d.error || `HTTP ${r.status}`);
+      } else {
+        setWaMsg(d.message || (d.ok ? "WhatsApp is starting…" : (d.error || "Failed")));
+      }
+    } catch (e) {
+      setWaMsg(String(e));
+    }
     await loadAll();
   };
   const waStop = async () => {
@@ -125,35 +137,81 @@ export default function Setup() {
       <section className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">WhatsApp Web session</h2>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${status?.whatsapp_connected ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/30" : "bg-zinc-800 text-zinc-400 border border-zinc-700"}`}>
-            {status?.whatsapp_connected ? "connected" : "offline"}
-          </span>
+          <StepBadge step={waStatus?.step} connected={status?.whatsapp_connected} />
         </div>
         {status?.whatsapp_groups?.length > 0 && (
           <div data-testid="active-groups" className="text-xs text-zinc-400">
             Watching: {status.whatsapp_groups.map((g) => (
               <span key={g} className={`inline-block px-2 py-0.5 mx-0.5 rounded-full border ${g === status?.whatsapp_active_group ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : "border-zinc-700 text-zinc-300"}`}>
-                {g}{g === status?.whatsapp_active_group ? " • active" : ""}
+                {g}{g === status?.whatsapp_active_group ? " · active" : ""}
               </span>
             ))}
           </div>
         )}
-        {status?.whatsapp_qr ? (
+
+        {waStatus?.prompt && (
+          <div data-testid="wa-prompt" className="rounded-lg border border-sky-500/30 bg-sky-500/5 p-3 text-xs text-sky-200 leading-relaxed">
+            {waStatus.prompt}
+          </div>
+        )}
+        {waStatus?.last_error && (
+          <div data-testid="wa-error" className="rounded-lg border border-rose-500/30 bg-rose-500/5 p-3 text-xs text-rose-200 whitespace-pre-wrap break-words font-mono leading-relaxed">
+            {waStatus.last_error}
+          </div>
+        )}
+
+        {waStatus?.qr_data_url ? (
           <div className="text-center">
-            <img src={status.whatsapp_qr} alt="Scan QR" className="mx-auto w-56 h-56 rounded bg-white p-2" />
-            <p className="text-xs text-zinc-500 mt-2">Open WhatsApp → Linked devices → scan this QR.</p>
+            <img data-testid="wa-qr-img" src={waStatus.qr_data_url} alt="Scan QR" className="mx-auto w-56 h-56 rounded bg-white p-2" />
+            <p className="text-xs text-zinc-500 mt-2 flex items-center justify-center gap-1">
+              <RefreshCcw className="w-3 h-3 animate-spin" style={{ animationDuration: "3s" }} />
+              QR auto-refreshes every ~5s. Open WhatsApp → Linked devices → Link a device.
+            </p>
           </div>
         ) : (
-          <p className="text-xs text-zinc-500">Once started, if not yet linked, a QR code appears here.</p>
+          <p className="text-xs text-zinc-500">
+            {waStatus?.step === "connected" ? "Linked and watching your groups."
+              : waStatus?.step === "launching" ? "Chromium is starting…"
+              : "Click Start session to open the QR."}
+          </p>
         )}
+
+        {waStatus?.screenshot_b64 && waStatus?.step !== "connected" && (
+          <details className="text-xs text-zinc-400">
+            <summary className="cursor-pointer select-none hover:text-zinc-200">Show live browser view</summary>
+            <img
+              data-testid="wa-screenshot"
+              src={`data:image/png;base64,${waStatus.screenshot_b64}`}
+              alt="Bot browser view"
+              className="mt-2 w-full rounded border border-zinc-800"
+            />
+          </details>
+        )}
+
         <div className="flex gap-2">
           <button data-testid="btn-wa-start" onClick={waStart} className="btn-primary"><Play className="w-4 h-4" /> Start session</button>
           <button data-testid="btn-wa-stop" onClick={waStop} className="btn-secondary"><Square className="w-4 h-4" /> Stop</button>
         </div>
-        {waMsg && <p data-testid="wa-msg" className="text-xs text-zinc-400">{waMsg}</p>}
+        {waMsg && <p data-testid="wa-msg" className="text-xs text-zinc-400 whitespace-pre-wrap break-words">{waMsg}</p>}
       </section>
     </div>
   );
+}
+
+function StepBadge({ step, connected }) {
+  const map = {
+    idle:        ["offline",       "bg-zinc-800 text-zinc-400 border-zinc-700"],
+    launching:   ["starting…",     "bg-sky-500/10 text-sky-300 border-sky-500/30"],
+    awaiting_qr: ["scan QR",       "bg-amber-500/10 text-amber-300 border-amber-500/30"],
+    scanning:    ["linking…",      "bg-sky-500/10 text-sky-300 border-sky-500/30"],
+    linking:     ["linking…",      "bg-sky-500/10 text-sky-300 border-sky-500/30"],
+    connected:   ["connected",     "bg-emerald-500/10 text-emerald-300 border-emerald-500/30"],
+    error:       ["error",         "bg-rose-500/10 text-rose-300 border-rose-500/30"],
+    stopped:     ["stopped",       "bg-zinc-800 text-zinc-400 border-zinc-700"],
+  };
+  const key = connected ? "connected" : (step || "idle");
+  const [label, cls] = map[key] || ["offline", "bg-zinc-800 text-zinc-400 border-zinc-700"];
+  return <span data-testid="wa-step-badge" className={`text-xs px-2 py-0.5 rounded-full border ${cls}`}>{label}</span>;
 }
 
 function Field({ label, children, testid }) {
