@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 8 re-architecture verification. Preview is unaffected as designed: /app/frontend/build does NOT exist so the new spa_fallback block in server.py is dead code. All 11 backend smoke tests pass (regression + iter8-specific SPA-safety asserts). All 4 frontend routes (/, /transactions, /test, /setup) load with HTTP 200 and 0 console errors on the preview URL. Setup page still shows gpay-accounts panel with count '1 active / 3 total'. /api/* routing is intact — /api/status still 200, /api/definitely-not-real returns 404 from FastAPI router (not swallowed).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "smoke_results": {
+    "GET /api/": "200 mock_mode present",
+    "GET /api/status": "200 mock_mode=true + gpay_active_count/gpay_total_count/whatsapp_groups",
+    "GET /api/settings": "200 dict",
+    "GET /api/gpay/accounts": "200 list, no password_enc leak",
+    "GET /api/transactions/stats": "200 (5 counters)",
+    "GET /api/transactions/groups": "200 list",
+    "POST /api/gpay/accounts (mock)": "200 login.ok=true, no pw leak",
+    "DELETE /api/gpay/accounts/{id}": "200 ok=true; cleanup done",
+    "POST /api/process-screenshot (even-UTR PNG)": "200 status present",
+    "GET /api/definitely-not-a-real-endpoint": "404 (router, not SPA fallback)",
+    "GET /api/status (sanity)": "200",
+    "GET /some/spa/route": "200 React HTML — served by preview ingress -> :3000 dev server (NOT by backend spa_fallback which is dead code because build dir absent)",
+    "Frontend / /transactions /test /setup": "All 200, 0 console errors",
+    "Setup /setup gpay-count": "1 active / 3 total"
+  },
+  "spa_fallback_review": "server.py:412-432 correctly guards mounting with `if FRONTEND_DIR.exists()`. Preview has no /app/frontend/build so the block is skipped entirely — no `/static` mount, no catch-all route registered. Even if it were active, the guard `if full_path.startswith('api/') or full_path == 'api'` prevents interception of API paths, and FastAPI evaluates included routers before the catch-all mount so /api/* always resolves first. Safe.",
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_8.py",
+    "/app/test_reports/pytest/iteration_8.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "SPA fallback guard is correct — checks both `full_path.startswith('api/')` and equality with 'api'. Router precedence (app.include_router before mount) makes this defense-in-depth.",
+    "Minor: the spa_fallback route registration path could optionally emit a log line on startup for local-runner visibility (`logger.info('Serving SPA from ...')`), so users know static assets are being served. Optional, not blocking."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration_8.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "100% (4/4 routes)"},
+  "seed_data_creation": "One TEST_iter8 GPay account was created & deleted within test lifecycle; no residue.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 8 was a local-runner Dockerfile/compose re-architecture. Preview is intentionally unaffected because /app/frontend/build is absent, keeping the spa_fallback block dead. If a future iteration needs to validate the local runner, it must be tested inside a Docker environment where the build stage runs; preview cannot exercise that code path. Existing test suites: /app/backend/tests/test_iteration_2..8."
+}
