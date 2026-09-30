@@ -1,10 +1,10 @@
 # =====================================================================
-# PayVerify Bot — One-click Windows installer
+# PayVerify Bot -- One-click Windows installer
 # Handles: Docker install, code fetch, config, first run, shortcuts.
 # =====================================================================
 
 # =====================================================================
-# PayVerify Bot — one-click Windows installer (invoked by install.cmd).
+# PayVerify Bot -- one-click Windows installer (invoked by install.cmd).
 # Handles: Docker install, code fetch, config, first run, shortcuts.
 # =====================================================================
 param(
@@ -80,7 +80,7 @@ for ($i = 0; $i -lt 30; $i++) {
         if ($LASTEXITCODE -eq 0) { $dockerRunning = $true; break }
     } catch {}
     if ($i -eq 0) {
-        Write-Warn "Docker daemon not running — starting Docker Desktop..."
+        Write-Warn "Docker daemon not running -- starting Docker Desktop..."
         $dd = "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe"
         if (Test-Path $dd) { Start-Process $dd | Out-Null }
     }
@@ -98,7 +98,7 @@ Write-OK "Docker is running."
 # ---------------------------------------------------------------------
 Write-Step "Downloading the bot into $InstallDir ..."
 if (Test-Path $InstallDir) {
-    Write-Warn "Existing install found — updating in place."
+    Write-Warn "Existing install found -- updating in place."
 } else {
     New-Item -ItemType Directory -Path $InstallDir | Out-Null
 }
@@ -125,7 +125,7 @@ Write-OK "Code downloaded."
 # ---------------------------------------------------------------------
 $envFile = Join-Path $InstallDir "local-runner\.env"
 if (-not (Test-Path $envFile)) {
-    Write-Step "First-time setup — enter your API keys (one time only)"
+    Write-Step "First-time setup -- enter your API keys (one time only)"
     Write-Host "    Get these from your Emergent app -> Code viewer -> backend/.env" -ForegroundColor DarkGray
 
     $llmKey  = Read-Host "  Paste EMERGENT_LLM_KEY (starts with sk-emergent-)"
@@ -150,7 +150,7 @@ GPAY_ENC_KEY=$encKey
 "@ | Set-Content -Path $envFile -Encoding UTF8
     Write-OK "Config saved."
 } else {
-    Write-OK "Existing config found — keeping it."
+    Write-OK "Existing config found -- keeping it."
 }
 
 # ---------------------------------------------------------------------
