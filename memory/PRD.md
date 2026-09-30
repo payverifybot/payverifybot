@@ -82,6 +82,16 @@ Daily 21:00 IST cron (.emergent/crons.yml) → email_service (Resend) → owner
 - Verified end-to-end: 2.8s for OCR + parallel verify with 2 accounts (mock)
 - Testing 100%/100% (47/47 tests, 16 new + 31 regression)
 
+### 2026-02-01 · Iter 11 — Live-mode observability + native Windows runner
+- **whatsapp_service.py rewritten**: step tracking (idle/launching/awaiting_qr/connected/error/stopped), QR auto-refreshes every 5s while unlinked (handles WA's 60s QR rotation), full-page screenshots captured on every state change, human-readable `prompt` messages
+- **gpay_service.py rewritten**: per-account step tracking (launching → loading_login → entering_email → entering_password → awaiting_2fa | awaiting_captcha | awaiting_review → opening_dashboard → logged_in | error). `_wait_for_login_outcome` polls the page for 10 min looking for dashboard / 2FA prompts / captcha / password errors and automatically continues once the operator resolves the manual step. After login, auto-navigates to `GPAY_TXN_URL` (overridable) for fast UTR verification.
+- **New endpoints**: `GET /api/whatsapp/status` (step, qr_data_url, screenshot_b64, prompt, error), `GET /api/gpay/accounts/{id}/status` (per-account step + screenshot + prompt + error).
+- **Frontend Setup.jsx**: WhatsApp panel now shows `StepBadge`, live prompt/error boxes, auto-refreshing QR image with animated refresh icon, collapsible live browser screenshot. Properly parses HTTP errors (`d.detail || d.error`).
+- **Frontend GPayAccounts.jsx**: each account renders `StepPill` + live prompt/error boxes + collapsible live browser view. Polls `/status` every 3s.
+- **Frontend Dashboard.jsx**: Diagnostics list now uses `<pre>` with `whitespace-pre-wrap` and per-check bordered cards; full multi-line error text visible (no more truncation).
+- **Native Windows runner** at `local-runner/native/`: install-native.cmd + install-native.ps1 that installs Python 3.11 + MongoDB 7 + Playwright Chromium directly on Windows (no Docker) and runs Chromium HEADED so Google 2FA / captcha screens are visible to the operator. Persistent Chromium profile shared with Docker install.
+- Testing 100%/100% (backend + frontend)
+
 ## Backlog
 ### P0
 - Restart WhatsApp watcher automatically when `group_names` changes (currently stop/start)

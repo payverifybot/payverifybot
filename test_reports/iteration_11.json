@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 11 (WhatsApp/GPay live-status endpoints + rich diagnostics) fully verified. Backend: 11/11 pytest cases pass — regression smoke (root, transactions, process-screenshot); new POST /api/whatsapp/start correctly returns HTTP 400 with 'Add at least one WhatsApp group in settings first' when groups list empty and 200 {ok,mock,step:connected,groups:[...]} with groups configured; GET /api/whatsapp/status returns full shape (step, connected, qr_data_url, screenshot_b64, prompt, last_error, groups, active_group, updated_at, headless, mock); GET /api/gpay/accounts/{id}/status returns full shape and 404 for unknown id; POST /api/gpay/accounts in mock mode returns login.mock=true & login.step=logged_in and list_accounts reflects is_logged_in=true; GET /api/diagnostics returns exactly 6 checks all ok:true with Playwright='skipped (mock mode)' in mock and actual chromium launch in live mode (verified live mode Playwright check succeeds — Chromium browsers are installed). Frontend: /setup renders data-testid=wa-step-badge='connected', GPay accounts (Store-A, Store-B, rohan) each render with step labels (offline / verifying). /dashboard 'Run full self-check' populates 6 items each with data-testid=diag-detail-{name} as <pre class='whitespace-pre-wrap'> — verified full untruncated multi-line detail text renders (Gemini OCR shows full keys list, WhatsApp shows full group array, etc.). 'Copy full report' button works and produces confirmation text. Seeded accounts (Store-A/Store-B/rohan) preserved. Final runtime state left at mock_mode=true.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration_11.py",
+    "/app/test_reports/pytest/iter11.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "whatsapp_service.py and gpay_service.py hold in-process singleton state — if backend is scaled beyond 1 worker, status/screenshot won't be shared across workers. Fine for MVP; document if scaling planned.",
+    "gpay_service._AccountSession.close() cancels login task but does not await it — a still-running Playwright startup could race with cleanup. Minor.",
+    "diagnostics endpoint is unauthenticated and calls Gemini OCR + (in live mode) launches Chromium on every hit — could be abused. Consider gating with the same bearer token used by /api/cron/digest.",
+    "whatsapp_service._boot uses asyncio.get_event_loop() which is deprecated in 3.12+; use asyncio.get_running_loop() or asyncio.get_event_loop().time via loop capture at entry.",
+    "In _wait_for_login_outcome the compound `and` conditions bind tighter than `or` (e.g. `'check your' in body_text and 'phone' in body_text or ...`) — likely correct but readability suffers; wrap each detection in parentheses to make intent explicit."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_11.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "n/a",
+  "seed_data_creation": "Created + deleted temporary GPay account TEST_iter11 during test_gpay_add_mock_and_status_shape. Seeded Store-A / Store-B / rohan accounts left untouched.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All new iter-11 endpoints (whatsapp/status, gpay/accounts/{id}/status) verified in mock mode. Live-mode Playwright launch also verified to work (chromium installed). Cannot end-to-end test real WA QR flow or real Google login here — that requires a phone + real credentials. Test file /app/backend/tests/test_iteration_11.py contains 11 assertions covering shape + status codes + regression. Runtime mock_mode left at true.",
+  "rca of the issue": "n/a — no blocking bugs found."
+}
