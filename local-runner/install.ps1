@@ -175,7 +175,7 @@ $shortcutPath = "$env:USERPROFILE\Desktop\PayVerify Bot.lnk"
 $wsh = New-Object -ComObject WScript.Shell
 $sc = $wsh.CreateShortcut($shortcutPath)
 $sc.TargetPath = "cmd.exe"
-$sc.Arguments  = "/c start http://localhost:3000"
+$sc.Arguments  = "/c start http://localhost:8001"
 $sc.IconLocation = "$env:SystemRoot\System32\shell32.dll,13"
 $sc.WorkingDirectory = "$InstallDir\local-runner"
 $sc.Save()
@@ -196,7 +196,7 @@ Write-OK "Bot will auto-start when you log in to Windows."
 # ---------------------------------------------------------------------
 Write-Step "Opening the dashboard..."
 Start-Sleep -Seconds 3
-Start-Process "http://localhost:3000"
+Start-Process "http://localhost:8001"
 
 Write-Host @"
 

@@ -1,15 +1,37 @@
 # syntax=docker/dockerfile:1
 
+# =====================================================================
+# Stage 1 — build the React frontend into static assets.
+# =====================================================================
+FROM node:20-slim AS frontend-builder
+
+WORKDIR /app/frontend
+# Copy manifests first so yarn install can be cached across code changes
+COPY frontend/package.json frontend/yarn.lock ./
+RUN corepack enable && yarn install --frozen-lockfile --network-timeout 600000
+
+# Now copy the rest of the frontend source and build it.
+# REACT_APP_BACKEND_URL is empty on purpose: the built app makes relative
+# /api/... calls, which the same FastAPI server (below) also serves.
+COPY frontend/ ./
+ENV REACT_APP_BACKEND_URL=""
+ENV DISABLE_ESLINT_PLUGIN="true"
+ENV CI="false"
+RUN yarn build
+
+# =====================================================================
+# Stage 2 — Python backend + Playwright + the built React assets.
+# =====================================================================
 FROM mcr.microsoft.com/playwright/python:v1.63.0-jammy
 
 WORKDIR /app
 
-# System deps (pillow, fonts for OCR tests)
+# System deps (Pillow, fonts for OCR fallback rendering).
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev zlib1g-dev fonts-dejavu-core \
  && rm -rf /var/lib/apt/lists/*
 
-# Python deps -- use the slim list from local-runner/, not backend/requirements.txt
+# Python deps — slim, runtime only.
 COPY local-runner/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
  && pip install --no-cache-dir \
@@ -17,10 +39,11 @@ RUN pip install --no-cache-dir --upgrade pip \
       -r /app/requirements.txt \
  && playwright install chromium
 
-# Source
+# Backend source
 COPY backend /app/backend
-WORKDIR /app/backend
+# React static bundle copied from stage 1
+COPY --from=frontend-builder /app/frontend/build /app/frontend/build
 
-# The .env is mounted at runtime -- don't bake it in.
+WORKDIR /app/backend
 EXPOSE 8001
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8001"]

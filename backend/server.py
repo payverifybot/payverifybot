@@ -406,6 +406,32 @@ app.add_middleware(
 )
 
 
+# --- Serve the built React bundle when it exists (local runner) ---------
+# In the Emergent preview the frontend runs as a separate service on :3000
+# so this block silently no-ops. In the local docker-runner the Dockerfile
+# builds the React app into /app/frontend/build and this mounts it at /.
+FRONTEND_DIR = Path("/app/frontend/build")
+if FRONTEND_DIR.exists():
+    from fastapi.staticfiles import StaticFiles
+    from fastapi.responses import FileResponse
+
+    app.mount(
+        "/static",
+        StaticFiles(directory=str(FRONTEND_DIR / "static")),
+        name="static",
+    )
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        # Never intercept /api/* — the router above already handled those.
+        if full_path.startswith("api/") or full_path == "api":
+            raise HTTPException(status_code=404)
+        candidate = FRONTEND_DIR / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIR / "index.html")
+
+
 @app.on_event("startup")
 async def startup():
     gpay_pool.bind_db(db)

@@ -7,7 +7,7 @@ services:
     ports:
       - "27017:27017"
 
-  backend:
+  bot:
     build:
       context: ..
       dockerfile: local-runner/Dockerfile.backend
@@ -16,17 +16,13 @@ services:
     environment:
       MONGO_URL: "mongodb://mongo:27017"
       DB_NAME: "payverify"
-      CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
+      CORS_ORIGINS: "http://localhost:8001,http://127.0.0.1:8001"
       # MODE:
       # - "true"  = MOCK: no real Playwright, verify decided by UTR parity.
-      #             Use this to explore the dashboard and test the pipeline.
+      #             Use this to explore the dashboard immediately.
       # - "false" = LIVE: Playwright drives real Chromium for WhatsApp Web
-      #             + GPay Business. Google frequently blocks the first login;
-      #             you may need to complete 2FA on your phone.
-      # Default: true so first-time users can validate the app immediately.
-      # Flip to "false" when you are ready to connect real accounts.
+      #             + GPay Business. Google may require 2FA on first login.
       BOT_MOCK_MODE: "${BOT_MOCK_MODE:-true}"
-      # Persistent browser profiles so QR/2FA survive restarts
       WA_PROFILE_DIR: "/data/whatsapp_profile"
       GPAY_PROFILE_DIR: "/data/gpay_profile"
       EMERGENT_LLM_KEY: "${EMERGENT_LLM_KEY}"
@@ -38,17 +34,3 @@ services:
       - ./data/browser:/data
     ports:
       - "8001:8001"
-
-  frontend:
-    image: node:20-slim
-    working_dir: /app/frontend
-    restart: unless-stopped
-    depends_on: [backend]
-    environment:
-      REACT_APP_BACKEND_URL: "http://localhost:8001"
-      WDS_SOCKET_PORT: "0"
-    command: sh -c "corepack enable && yarn install --frozen-lockfile && yarn start"
-    volumes:
-      - ../frontend:/app/frontend
-    ports:
-      - "3000:3000"

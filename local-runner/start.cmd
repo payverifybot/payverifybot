@@ -19,5 +19,5 @@ if %errorLevel% neq 0 (
 REM Start the containers if not running
 docker compose up -d >nul 2>&1
 
-REM Open the dashboard
-start http://localhost:3000
+REM Open the dashboard (single port 8001 serves both API and UI)
+start http://localhost:8001
