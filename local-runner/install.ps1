@@ -3,19 +3,26 @@
 # Handles: Docker install, code fetch, config, first run, shortcuts.
 # =====================================================================
 
+# =====================================================================
+# PayVerify Bot — one-click Windows installer (invoked by install.cmd).
+# Handles: Docker install, code fetch, config, first run, shortcuts.
+# =====================================================================
+param(
+    [string]$Repo = ""
+)
+
 $ErrorActionPreference = "Stop"
 $InstallDir = "$env:USERPROFILE\PayVerifyBot"
 
-# Repo can be provided via a repo.txt next to install.cmd, else we ask once.
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$repoFile  = Join-Path $scriptDir "repo.txt"
-if (Test-Path $repoFile) {
-    $Repo = (Get-Content $repoFile -Raw).Trim()
-} else {
-    Write-Host "First-time only: which GitHub repo has your PayVerify bot code?" -ForegroundColor Yellow
-    Write-Host "  Format: username/repo-name (e.g. itbar/payverify-bot)" -ForegroundColor DarkGray
-    $Repo = Read-Host "  Enter your repo"
-    Set-Content -Path $repoFile -Value $Repo -Encoding ASCII
+if (-not $Repo) {
+    # Fallback if launched directly without a repo argument
+    $repoFile = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) "repo.txt"
+    if (Test-Path $repoFile) { $Repo = (Get-Content $repoFile -Raw).Trim() }
+    if (-not $Repo) {
+        Write-Host "First-time only: which GitHub repo has your PayVerify bot code?" -ForegroundColor Yellow
+        Write-Host "  Format: username/repo-name (e.g. itbar/payverify-bot)" -ForegroundColor DarkGray
+        $Repo = Read-Host "  Enter your repo"
+    }
 }
 $RepoZip = "https://github.com/$Repo/archive/refs/heads/main.zip"
 
