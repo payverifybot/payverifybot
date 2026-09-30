@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { API } from "@/App";
-import { CheckCircle2, XCircle, HelpCircle, Activity, TrendingUp, Copy, Mail, Loader2 } from "lucide-react";
+import { CheckCircle2, XCircle, HelpCircle, Activity, TrendingUp, Copy, Mail, Loader2, Stethoscope, ClipboardCopy } from "lucide-react";
 
 export default function Dashboard() {
   const [stats, setStats] = useState({ total: 0, received: 0, not_received: 0, utr_not_found: 0, duplicate: 0 });
@@ -8,6 +8,8 @@ export default function Dashboard() {
   const [status, setStatus] = useState(null);
   const [digestMsg, setDigestMsg] = useState(null);
   const [sendingDigest, setSendingDigest] = useState(false);
+  const [diag, setDiag] = useState(null);
+  const [runningDiag, setRunningDiag] = useState(false);
 
   const load = async () => {
     try {
@@ -31,6 +33,25 @@ export default function Dashboard() {
     } finally {
       setSendingDigest(false);
     }
+  };
+
+  const runDiagnostics = async () => {
+    setRunningDiag(true); setDiag(null);
+    try {
+      const r = await fetch(`${API}/diagnostics`).then((r) => r.json());
+      setDiag(r);
+    } catch (e) {
+      setDiag({ error: String(e) });
+    } finally {
+      setRunningDiag(false);
+    }
+  };
+
+  const copyDiag = async () => {
+    if (!diag) return;
+    await navigator.clipboard.writeText(JSON.stringify(diag, null, 2));
+    setDigestMsg("Copied full diagnostics to clipboard — paste it in your support chat.");
+    setTimeout(() => setDigestMsg(null), 4000);
   };
 
   useEffect(() => {
@@ -106,6 +127,42 @@ export default function Dashboard() {
               Mock mode: GPay & WhatsApp are simulated. UTRs ending in an even digit are marked {"\"received\""}, odd digit {"\"not received\""}. Turn off in <code className="text-emerald-300">BOT_MOCK_MODE</code> to use live automation.
             </p>
           )}
+          <div className="border-t border-zinc-800 pt-4 space-y-2">
+            <div className="flex items-center gap-2 text-sm font-medium text-zinc-200">
+              <Stethoscope className="w-4 h-4 text-sky-400" /> System diagnostics
+            </div>
+            <button
+              data-testid="btn-run-diag"
+              onClick={runDiagnostics}
+              disabled={runningDiag}
+              className="w-full inline-flex items-center justify-center gap-2 text-xs py-2 rounded bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/30 disabled:opacity-50"
+            >
+              {runningDiag ? <Loader2 className="w-3 h-3 animate-spin" /> : <Stethoscope className="w-3 h-3" />}
+              Run full self-check
+            </button>
+            {diag?.checks && (
+              <>
+                <ul data-testid="diag-list" className="space-y-1 mt-2 text-[11px]">
+                  {diag.checks.map((c) => (
+                    <li key={c.name} className="flex items-start gap-2">
+                      {c.ok ? <CheckCircle2 className="w-3 h-3 text-emerald-400 mt-0.5 shrink-0" /> : <XCircle className="w-3 h-3 text-rose-400 mt-0.5 shrink-0" />}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-zinc-300">{c.name}</div>
+                        <div className="text-zinc-500 truncate" title={c.detail}>{c.detail}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <button
+                  data-testid="btn-copy-diag"
+                  onClick={copyDiag}
+                  className="w-full inline-flex items-center justify-center gap-2 text-xs py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700"
+                >
+                  <ClipboardCopy className="w-3 h-3" /> Copy full report
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </section>
     </div>

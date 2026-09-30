@@ -396,6 +396,94 @@ async def digest_history(limit: int = 20):
     return await db.digests.find({}, {"_id": 0}).sort("sent_at", -1).to_list(limit)
 
 
+# ---- Diagnostics (self-test everything) ----
+@api.get("/diagnostics")
+async def diagnostics():
+    """Runs every integration check and returns one JSON blob.
+    Useful when live mode is not working — user shares this output with support."""
+    import platform, sys
+    result: dict = {
+        "when": datetime.now(timezone.utc).isoformat(),
+        "system": {
+            "platform": platform.platform(),
+            "python": sys.version.split()[0],
+            "mock_mode": os.environ.get("BOT_MOCK_MODE", "false").lower() == "true",
+        },
+        "env": {
+            "MONGO_URL_set": bool(os.environ.get("MONGO_URL")),
+            "EMERGENT_LLM_KEY_set": bool(os.environ.get("EMERGENT_LLM_KEY")),
+            "EMERGENT_EMAIL_KEY_set": bool(os.environ.get("EMERGENT_EMAIL_KEY")),
+            "GPAY_ENC_KEY_set": bool(os.environ.get("GPAY_ENC_KEY")),
+            "WEBHOOK_CRON_SECRET_set": bool(os.environ.get("WEBHOOK_CRON_SECRET")),
+        },
+        "checks": [],
+    }
+
+    async def check(name, coro):
+        try:
+            ok, detail = await coro
+            result["checks"].append({"name": name, "ok": ok, "detail": detail})
+        except Exception as e:
+            result["checks"].append({"name": name, "ok": False, "detail": f"exception: {e}"})
+
+    async def _mongo():
+        try:
+            info = await db.command("ping")
+            return True, f"ping ok, collections: {len(await db.list_collection_names())}"
+        except Exception as e:
+            return False, str(e)
+
+    async def _ocr():
+        try:
+            from ocr_service import extract_payment_details
+            tiny_png = (
+                b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+                b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\xff"
+                b"\xff?\x03\x00\x08\xfc\x02\xfe\xa7v\x8d\xba\x00\x00\x00\x00IEND\xaeB`\x82"
+            )
+            r = await extract_payment_details(tiny_png, session_id="diag")
+            return True, f"gemini reachable, returned keys: {list(r.keys())[:6]}"
+        except Exception as e:
+            return False, str(e)
+
+    async def _playwright():
+        if os.environ.get("BOT_MOCK_MODE", "false").lower() == "true":
+            return True, "skipped (mock mode)"
+        try:
+            from playwright.async_api import async_playwright
+            pw = await async_playwright().start()
+            b = await pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            v = b.version
+            await b.close(); await pw.stop()
+            return True, f"chromium {v} launched OK"
+        except Exception as e:
+            return False, str(e)
+
+    async def _gpay_pool():
+        accounts = await gpay_pool.list_accounts()
+        active = [a for a in accounts if a.get("is_active")]
+        online = [a for a in active if a.get("is_logged_in")]
+        return True, f"{len(accounts)} total, {len(active)} active, {len(online)} online"
+
+    async def _whatsapp():
+        return True, f"connected={whatsapp_service.is_connected}, groups={whatsapp_service.group_names}, error={whatsapp_service.last_error}"
+
+    async def _email():
+        if not os.environ.get("EMERGENT_EMAIL_KEY"):
+            return False, "EMERGENT_EMAIL_KEY not set"
+        return True, "key present (send not attempted here to avoid spam)"
+
+    await check("MongoDB", _mongo())
+    await check("Gemini OCR", _ocr())
+    await check("Playwright / Chromium", _playwright())
+    await check("GPay account pool", _gpay_pool())
+    await check("WhatsApp service", _whatsapp())
+    await check("Email service (Resend)", _email())
+
+    result["all_ok"] = all(c["ok"] for c in result["checks"])
+    return result
+
+
 app.include_router(api)
 app.add_middleware(
     CORSMiddleware,

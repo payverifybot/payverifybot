@@ -6,9 +6,10 @@
 FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/frontend
-# Copy manifests first so yarn install can be cached across code changes
-COPY frontend/package.json frontend/yarn.lock ./
-RUN corepack enable && yarn install --frozen-lockfile --network-timeout 600000
+# Copy manifests. yarn.lock is gitignored in this repo, so make it optional:
+# without a lockfile yarn resolves fresh (slower first build, but always works).
+COPY frontend/package.json ./
+RUN corepack enable && yarn install --network-timeout 600000
 
 # Now copy the rest of the frontend source and build it.
 # REACT_APP_BACKEND_URL is empty on purpose: the built app makes relative
