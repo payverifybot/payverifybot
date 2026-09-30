@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   mongo:
     image: mongo:7
@@ -19,24 +17,28 @@ services:
       MONGO_URL: "mongodb://mongo:27017"
       DB_NAME: "payverify"
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
-      # LIVE MODE — flip to true to simulate GPay/WhatsApp without a browser
-      BOT_MOCK_MODE: "false"
+      # MODE:
+      # - "true"  = MOCK: no real Playwright, verify decided by UTR parity.
+      #             Use this to explore the dashboard and test the pipeline.
+      # - "false" = LIVE: Playwright drives real Chromium for WhatsApp Web
+      #             + GPay Business. Google frequently blocks the first login;
+      #             you may need to complete 2FA on your phone.
+      # Default: true so first-time users can validate the app immediately.
+      # Flip to "false" when you are ready to connect real accounts.
+      BOT_MOCK_MODE: "${BOT_MOCK_MODE:-true}"
       # Persistent browser profiles so QR/2FA survive restarts
       WA_PROFILE_DIR: "/data/whatsapp_profile"
       GPAY_PROFILE_DIR: "/data/gpay_profile"
-      # Copy these three from your Emergent-hosted .env
       EMERGENT_LLM_KEY: "${EMERGENT_LLM_KEY}"
       EMERGENT_EMAIL_KEY: "${EMERGENT_EMAIL_KEY}"
       EMAIL_FROM_NAME: "${EMAIL_FROM_NAME:-PayVerify Bot}"
       WEBHOOK_CRON_SECRET: "${WEBHOOK_CRON_SECRET}"
+      GPAY_ENC_KEY: "${GPAY_ENC_KEY}"
     volumes:
       - ./data/browser:/data
     ports:
       - "8001:8001"
 
-  # Optional: run the React admin dashboard locally.
-  # If you're using the Emergent-hosted dashboard, delete this service and just
-  # point REACT_APP_BACKEND_URL there to http://localhost:8001.
   frontend:
     image: node:20-slim
     working_dir: /app/frontend

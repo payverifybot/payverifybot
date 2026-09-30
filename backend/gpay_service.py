@@ -69,7 +69,15 @@ class _AccountSession:
             self.is_logged_in = True
             self.last_error = None
             return {"ok": True, "mock": True}
+        try:
+            return await asyncio.wait_for(self._do_real_login(password), timeout=45.0)
+        except asyncio.TimeoutError:
+            logger.warning("GPay login timed out for %s", self.email)
+            self.last_error = "Login timed out (>45s). Google may be blocking automation — try again or complete a manual login once in the container."
+            await self.close()
+            return {"ok": False, "message": self.last_error, "timeout": True}
 
+    async def _do_real_login(self, password: str) -> dict:
         try:
             from playwright.async_api import async_playwright
             self._playwright = await async_playwright().start()
@@ -80,7 +88,7 @@ class _AccountSession:
                 args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
             )
             self._page = self._browser.pages[0] if self._browser.pages else await self._browser.new_page()
-            await self._page.goto(GPAY_URL, wait_until="domcontentloaded", timeout=30000)
+            await self._page.goto(GPAY_URL, wait_until="domcontentloaded", timeout=25000)
 
             if "signin" not in self._page.url and "accounts.google" not in self._page.url:
                 self.is_logged_in = True
@@ -88,14 +96,14 @@ class _AccountSession:
 
             await self._page.fill('input[type="email"]', self.email)
             await self._page.click("#identifierNext")
-            await self._page.wait_for_selector('input[type="password"]', timeout=10000)
+            await self._page.wait_for_selector('input[type="password"]', timeout=8000)
             await self._page.fill('input[type="password"]', password)
             await self._page.click("#passwordNext")
-            await self._page.wait_for_timeout(4000)
+            await self._page.wait_for_timeout(3000)
 
             if "challenge" in self._page.url:
-                self.last_error = "2FA required"
-                return {"ok": False, "requires_2fa": True, "message": "2FA required"}
+                self.last_error = "2FA required — approve on your phone, then click Re-login."
+                return {"ok": False, "requires_2fa": True, "message": self.last_error}
 
             self.is_logged_in = True
             return {"ok": True}
