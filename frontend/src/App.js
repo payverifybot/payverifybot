@@ -5,19 +5,47 @@ import Dashboard from "@/components/Dashboard";
 import Setup from "@/components/Setup";
 import Transactions from "@/components/Transactions";
 import TestUpload from "@/components/TestUpload";
-import { CircleCheckBig, Settings2, ScrollText, Upload, Bot } from "lucide-react";
+import { CircleCheckBig, Settings2, ScrollText, Upload, Bot, Radio, TestTube2 } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 export const API = `${BACKEND_URL}/api`;
 
 function Shell({ children }) {
   const [status, setStatus] = useState(null);
+  const [switching, setSwitching] = useState(false);
+
+  const load = () => fetch(`${API}/status`).then((r) => r.json()).then(setStatus).catch(() => {});
   useEffect(() => {
-    const load = () => fetch(`${API}/status`).then((r) => r.json()).then(setStatus).catch(() => {});
     load();
     const t = setInterval(load, 5000);
     return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const toggleMode = async () => {
+    const goingLive = status?.mock_mode;
+    if (goingLive) {
+      const ok = window.confirm(
+        "Switch to LIVE mode?\n\n" +
+        "This will use REAL Chromium + REAL Google login for GPay and REAL WhatsApp Web.\n\n" +
+        "Before you continue:\n" +
+        "  1. Remove any test/mock GPay accounts (Setup -> GPay accounts -> Remove)\n" +
+        "  2. Add your REAL GPay Business account (label + real email + real password)\n" +
+        "  3. Have your phone ready to approve Google 2FA and scan the WhatsApp QR\n\n" +
+        "Click OK to switch to LIVE."
+      );
+      if (!ok) return;
+    }
+    setSwitching(true);
+    try {
+      await fetch(`${API}/mode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mock_mode: !status?.mock_mode }),
+      });
+      await load();
+    } finally { setSwitching(false); }
+  };
 
   const link = "px-3 py-2 rounded-md text-sm flex items-center gap-2 transition-colors";
   const active = "bg-emerald-500/10 text-emerald-300 border border-emerald-500/20";
@@ -30,11 +58,20 @@ function Shell({ children }) {
           <div className="flex items-center gap-2">
             <Bot className="w-5 h-5 md:w-6 md:h-6 text-emerald-400" />
             <span className="font-semibold tracking-tight text-sm md:text-base">PayVerify Bot</span>
-            {status?.mock_mode && (
-              <span data-testid="mock-badge" className="ml-1 text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                Mock
-              </span>
-            )}
+            <button
+              data-testid="mode-toggle"
+              onClick={toggleMode}
+              disabled={switching || status === null}
+              title={status?.mock_mode ? "Currently in MOCK mode. Click to switch to LIVE." : "Currently in LIVE mode. Click to switch to MOCK."}
+              className={`ml-1 text-[10px] uppercase tracking-widest px-2 py-0.5 rounded-full border font-semibold transition-colors ${
+                status?.mock_mode
+                  ? "bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25"
+                  : "bg-emerald-500/15 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/25"
+              } disabled:opacity-50 inline-flex items-center gap-1`}
+            >
+              {status?.mock_mode ? <TestTube2 className="w-3 h-3" /> : <Radio className="w-3 h-3" />}
+              {switching ? "..." : (status?.mock_mode ? "Mock" : "Live")}
+            </button>
           </div>
           <nav className="flex items-center gap-1 overflow-x-auto scrollbar-hide -mx-1 px-1 order-3 w-full md:order-none md:w-auto">
             <NavLink data-testid="nav-dashboard" end to="/" className={({ isActive }) => `${link} ${isActive ? active : idle}`}>

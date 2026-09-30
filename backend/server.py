@@ -17,6 +17,7 @@ from gpay_service import gpay_service, gpay_pool
 from whatsapp_service import whatsapp_service
 from bot_orchestrator import process_payment_screenshot
 from email_service import send_email, render_digest_html
+import runtime_state
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -96,7 +97,24 @@ async def _compute_stats(since_iso: Optional[str] = None, group: Optional[str] =
 # ---------- Routes ----------
 @api.get("/")
 async def root():
-    return {"service": "PayVerify Bot", "mock_mode": os.environ.get("BOT_MOCK_MODE", "false")}
+    return {"service": "PayVerify Bot", "mock_mode": runtime_state.is_mock_mode()}
+
+
+class ModeUpdate(BaseModel):
+    mock_mode: bool
+
+
+@api.get("/mode")
+async def get_mode():
+    return {"mock_mode": runtime_state.is_mock_mode()}
+
+
+@api.post("/mode")
+async def set_mode(payload: ModeUpdate):
+    """Toggle mock/live mode at runtime. No restart needed."""
+    runtime_state.set_mock_mode(payload.mock_mode)
+    logger.info("Runtime mock_mode set to %s", payload.mock_mode)
+    return {"mock_mode": runtime_state.is_mock_mode()}
 
 
 @api.get("/status")
@@ -104,7 +122,7 @@ async def status():
     accounts = await gpay_pool.list_accounts()
     active_online = [a for a in accounts if a.get("is_active") and a.get("is_logged_in")]
     return {
-        "mock_mode": os.environ.get("BOT_MOCK_MODE", "false").lower() == "true",
+        "mock_mode": runtime_state.is_mock_mode(),
         "whatsapp_connected": whatsapp_service.is_connected,
         "whatsapp_qr": whatsapp_service.qr_data_url,
         "whatsapp_error": whatsapp_service.last_error,
@@ -407,7 +425,7 @@ async def diagnostics():
         "system": {
             "platform": platform.platform(),
             "python": sys.version.split()[0],
-            "mock_mode": os.environ.get("BOT_MOCK_MODE", "false").lower() == "true",
+            "mock_mode": runtime_state.is_mock_mode(),
         },
         "env": {
             "MONGO_URL_set": bool(os.environ.get("MONGO_URL")),
@@ -447,7 +465,7 @@ async def diagnostics():
             return False, str(e)
 
     async def _playwright():
-        if os.environ.get("BOT_MOCK_MODE", "false").lower() == "true":
+        if runtime_state.is_mock_mode():
             return True, "skipped (mock mode)"
         try:
             from playwright.async_api import async_playwright

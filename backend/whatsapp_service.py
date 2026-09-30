@@ -22,7 +22,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger(__name__)
 
-MOCK_MODE = os.environ.get("BOT_MOCK_MODE", "false").lower() == "true"
+MOCK_MODE_LEGACY = os.environ.get("BOT_MOCK_MODE", "false").lower() == "true"  # legacy fallback only
+import runtime_state as _rt
+
+def _is_mock() -> bool:
+    return _rt.is_mock_mode()
 WA_URL = "https://web.whatsapp.com/"
 USER_DATA_DIR = Path(os.environ.get("WA_PROFILE_DIR", "/tmp/whatsapp_profile"))
 POLL_INTERVAL = float(os.environ.get("WA_POLL_INTERVAL", "3"))
@@ -122,7 +126,7 @@ class WhatsAppService:
         self._last_error = None
         self._seen_by_group = {g: set() for g in self._group_names}
 
-        if MOCK_MODE:
+        if _is_mock():
             self._connected = True
             self._qr_data_url = None
             logger.info("WhatsApp (mock) started for groups %s", self._group_names)
@@ -223,7 +227,7 @@ class WhatsAppService:
                 logger.exception("WA monitor loop error")
 
     async def send_reply(self, message_id: str, text: str) -> bool:
-        if MOCK_MODE:
+        if _is_mock():
             logger.info("[MOCK WA reply] msg=%s -> %s", message_id, text)
             return True
         if not self._page:

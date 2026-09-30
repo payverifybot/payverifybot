@@ -18,11 +18,11 @@ from typing import Optional
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from cryptography.fernet import Fernet, InvalidToken
+import runtime_state
 
 load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger(__name__)
 
-MOCK_MODE = os.environ.get("BOT_MOCK_MODE", "false").lower() == "true"
 GPAY_URL = "https://business.google.com/payments"
 BASE_PROFILE_DIR = Path(os.environ.get("GPAY_PROFILE_DIR", "/tmp/gpay_profiles"))
 ENC_KEY = os.environ.get("GPAY_ENC_KEY")
@@ -64,7 +64,7 @@ class _AccountSession:
         return BASE_PROFILE_DIR / self.account_id
 
     async def login(self, password: str) -> dict:
-        if MOCK_MODE:
+        if runtime_state.is_mock_mode():
             await asyncio.sleep(0.3)
             self.is_logged_in = True
             self.last_error = None
@@ -114,7 +114,7 @@ class _AccountSession:
 
     async def verify_utr(self, utr: str, amount: Optional[str] = None) -> dict:
         """Return { found: bool, ... }."""
-        if MOCK_MODE:
+        if runtime_state.is_mock_mode():
             await asyncio.sleep(0.2)
             found = bool(utr) and int(utr[-1]) % 2 == 0
             return {"found": found, "utr": utr, "amount": amount, "raw": "mock"}

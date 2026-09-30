@@ -47,6 +47,24 @@ export default function Setup() {
         <p className="text-zinc-400 text-sm mt-1">Configure the bot&apos;s connections and reply behavior.</p>
       </div>
 
+      {status && !status.mock_mode && (
+        <div data-testid="live-banner" className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-sm text-emerald-200 space-y-2">
+          <div className="font-semibold flex items-center gap-2"><span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> LIVE mode is on</div>
+          <ol className="list-decimal list-inside text-emerald-100/80 text-xs space-y-1">
+            <li>Remove any mock/test GPay accounts (the ones you added while in Mock mode) using the <b>Remove</b> button.</li>
+            <li>Add your REAL GPay Business account — real Google email + real password. Have your phone ready to approve the 2FA prompt.</li>
+            <li>Start the WhatsApp session and scan the QR from your phone (WhatsApp -> Linked devices -> Link a device).</li>
+            <li>Post a real payment screenshot in your group and watch the bot reply.</li>
+          </ol>
+        </div>
+      )}
+      {status?.mock_mode && (
+        <div data-testid="mock-banner" className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-200">
+          <div className="font-semibold flex items-center gap-2">MOCK mode is on</div>
+          <p className="text-amber-100/80 text-xs mt-1">Everything is simulated — no real WhatsApp, no real Google login. Use this to explore the UI. When ready, click the <b>Mock</b> pill in the header to switch to LIVE.</p>
+        </div>
+      )}
+
       {/* Bot settings */}
       <section className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-6 space-y-4">
         <h2 className="text-lg font-semibold">Bot settings</h2>
