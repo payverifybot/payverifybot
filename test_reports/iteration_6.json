@@ -1,0 +1,25 @@
+{
+  "summary": "Iteration 6 regression smoke pass. Change was Docker-only (local-runner/requirements.txt + Dockerfile.backend); preview backend/frontend untouched. All 5 target endpoints return expected shape; even-UTR upload returns status=received with account_label populated; all 4 frontend routes load with 0 JS console errors and expected data-testids present.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "smoke_results": {
+    "GET /api/status": "200 - mock_mode=true, gpay_active_count=1, gpay_total_count=3, whatsapp_groups=[] present",
+    "GET /api/gpay/accounts": "200 - accounts list returned, no password_enc field present",
+    "GET /api/settings": "200 - group_names=['Bulk Orders','Premium Buyers'], reply_template_success contains '{account_label}'",
+    "POST /api/process-screenshot (UTR 987654321098, even)": "200 - status='received', account_label='rohan', reply_text starts with '✅ Received via rohan'",
+    "GET /api/transactions/stats": "200 - {total:35, received:14, not_received:10, utr_not_found:3, duplicate:8}",
+    "Frontend / /transactions /test /setup": "All load; nav testids (nav-dashboard, nav-transactions, nav-test, nav-setup) + mock-badge + pill-wa present; 0 JS/console errors"
+  },
+  "docker_config_review": {
+    "local-runner/requirements.txt": "Slim 12-pkg list matches actual backend imports (fastapi, uvicorn, motor, pymongo, pydantic, python-dotenv, python-multipart, cryptography, httpx, pillow, playwright, emergentintegrations). Looks correct.",
+    "local-runner/Dockerfile.backend": "Uses Playwright 1.63.0 jammy base (Py3.10 compatible), installs slim reqs with --extra-index-url for emergentintegrations, no em-dashes in comments. Cannot validate actual docker build in preview container - user must test on Windows."
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (5/5)", "frontend": "100% (4/4 routes)"},
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Docker-only change. Preview env unchanged from iteration 5. Actual local docker build validation must happen on user's Windows laptop - out of scope for preview container testing."
+}
